@@ -38,10 +38,12 @@ impl FlashId {
 
     /// True if a chip actually responded to RDID (an idle/floating bus reads
     /// all `0x00` or all `0xFF`).
+    #[allow(dead_code)] // wired in Task 15 (SFDP detect: chip-presence check)
     pub fn is_present(&self) -> bool {
         self.manufacturer != 0x00 && self.manufacturer != 0xFF
     }
 
+    #[allow(dead_code)] // wired in Task 15 (fallback-table lookup by JEDEC id)
     pub fn jedec(&self) -> [u8; 3] { [self.manufacturer, self.mem_type, self.capacity_code] }
 }
 
@@ -69,6 +71,7 @@ pub trait BusAccess {
 }
 
 /// No-op bus access for a bare flash (nothing else on the SPI bus). Default.
+#[allow(dead_code)] // library convenience (CLI always wires HostBus)
 pub struct NoHold;
 impl BusAccess for NoHold {
     type Error = core::convert::Infallible;
@@ -79,6 +82,7 @@ impl BusAccess for NoHold {
 /// Progress callback events for the high-level flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
+    #[allow(dead_code)] // emitted in Task 15 (SFDP detect); main.rs only matches it
     Detecting,          // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
     Erasing,
     Programming(usize), // bytes written so far
@@ -95,10 +99,13 @@ pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
     VerifyMismatch { addr: usize, expected: u8, got: u8 },
     TooLarge { need: usize, have: usize },
     /// RDID read nothing — no chip on the bus.
+    #[allow(dead_code)] // constructed in Task 15 (detect)
     NoFlash,
     /// A chip responded but has no SFDP and no fallback-table entry.
+    #[allow(dead_code)] // constructed in Task 15 (detect)
     UnsupportedChip { jedec: [u8; 3] },
     /// A geometry op was attempted before `detect_profile` succeeded.
+    #[allow(dead_code)] // constructed in Task 15 (detect)
     NotDetected,
 }
 
@@ -138,6 +145,7 @@ where
     RST: BusAccess,
 {
     /// Sensible defaults: 256-byte SPI chunks, 2 ms poll interval, 60 s timeout.
+    #[allow(dead_code)] // library convenience (CLI uses with_config)
     pub fn new(spi: SPI, reset: RST) -> Self {
         Self::with_config(spi, reset, PAGE_SIZE, Duration::from_millis(2), Duration::from_secs(60))
     }
