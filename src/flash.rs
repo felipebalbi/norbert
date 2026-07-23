@@ -185,6 +185,37 @@ where
             std::thread::sleep(self.poll_interval);
         }
     }
+
+    fn erase_block(&mut self, addr: u32) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.write_enable()?;
+        let a = addr.to_be_bytes();
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_BE64, a[1], a[2], a[3]])])
+            .map_err(Self::spi_err)?;
+        self.wait_ready()
+    }
+
+    /// Erase the whole device (0xC7). Slowest but universally supported.
+    pub fn chip_erase(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.write_enable()?;
+        self.spi.transaction(&mut [Operation::Write(&[CMD_CE])]).map_err(Self::spi_err)?;
+        self.wait_ready()
+    }
+
+    /// Erase every 64 KiB block overlapping `[offset, offset+len)`.
+    pub fn erase_range(&mut self, offset: usize, len: usize)
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        if len == 0 { return Ok(()); }
+        let first = offset - offset % BLOCK_SIZE;
+        let end = offset + len;
+        let mut a = first;
+        while a < end {
+            self.erase_block(a as u32)?;
+            a += BLOCK_SIZE;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -230,6 +261,31 @@ mod tests {
         let mut f = Flasher::with_config(
             flash, FakeBus::new(), 256, Duration::ZERO, Duration::ZERO);
         assert!(matches!(f.wait_ready(), Err(FlashError::Timeout)));
+    }
+
+    #[test]
+    fn erase_range_sets_ff_across_covered_blocks() {
+        let size = 256 * 1024; // 4 blocks
+        let flash = FakeFlash::new(size, [0x20, 0x20, 0x15]);
+        for i in 0..size { flash.preset(i, &[0x00]); } // dirty everything
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+
+        // A 1-byte image at offset 100 must erase exactly block 0 (0..64K).
+        f.erase_range(100, 1).unwrap();
+        let mem = probe.mem();
+        assert!(mem[0..BLOCK_SIZE].iter().all(|&b| b == 0xFF));      // block 0 erased
+        assert!(mem[BLOCK_SIZE..].iter().all(|&b| b == 0x00));        // block 1+ untouched
+    }
+
+    #[test]
+    fn chip_erase_clears_all() {
+        let flash = FakeFlash::new(BLOCK_SIZE, [0x20, 0x20, 0x15]);
+        for i in 0..BLOCK_SIZE { flash.preset(i, &[0x00]); }
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.chip_erase().unwrap();
+        assert!(probe.mem().iter().all(|&b| b == 0xFF));
     }
 
     #[derive(Debug)]
