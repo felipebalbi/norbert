@@ -294,6 +294,45 @@ where
         }
         Ok(())
     }
+
+    /// Hold the FPGA in reset (CRESET low, tri-states the shared bus).
+    pub fn acquire_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.reset.acquire().map_err(Self::bus_err)
+    }
+
+    /// Release CRESET (Hi-Z) so the FPGA reconfigures from flash.
+    pub fn release_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.reset.release().map_err(Self::bus_err)
+    }
+
+    /// Full flow: reset → erase covered region → program → (verify) → release.
+    /// On any error the caller should still call `release_bus` (see main.rs).
+    pub fn flash_bitstream(
+        &mut self,
+        offset: usize,
+        image: &[u8],
+        verify: bool,
+        flash_size: Option<usize>,
+        mut progress: impl FnMut(Progress),
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        if let Some(sz) = flash_size {
+            if offset + image.len() > sz {
+                return Err(FlashError::TooLarge { need: offset + image.len(), have: sz });
+            }
+        }
+        self.acquire_bus()?;
+        progress(Progress::Erasing);
+        self.erase_range(offset, image.len())?;
+        progress(Progress::Programming(0));
+        self.program(offset, image, |w| progress(Progress::Programming(w)))?;
+        if verify {
+            progress(Progress::Verifying(0));
+            self.verify(offset, image, |v| progress(Progress::Verifying(v)))?;
+        }
+        self.release_bus()?;
+        progress(Progress::Done);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +443,36 @@ mod tests {
             Err(FlashError::VerifyMismatch { addr, .. }) => assert_eq!(addr, 123),
             other => panic!("expected mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn flash_bitstream_end_to_end() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x1C, 0x70, 0x15]);
+        let probe = flash.clone();
+        let reset = FakeBus::new();
+        let reset_probe = reset.clone();
+        let mut f = flasher(flash, reset, 64);
+
+        let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        let mut events = Vec::new();
+        f.flash_bitstream(0, &image, true, Some(2 * 1024 * 1024), |p| events.push(p))
+            .unwrap();
+
+        assert_eq!(&probe.mem()[..1000], &image[..]);
+        assert!(!reset_probe.asserted(), "CRESET must be released at the end");
+        assert_eq!(events.first(), Some(&Progress::Erasing));
+        assert_eq!(events.last(), Some(&Progress::Done));
+    }
+
+    #[test]
+    fn flash_bitstream_rejects_oversize() {
+        let flash = FakeFlash::new(1024, [0x1C, 0x70, 0x15]);
+        let mut f = flasher(flash, FakeBus::new(), 64);
+        let image = vec![0u8; 2048];
+        assert!(matches!(
+            f.flash_bitstream(0, &image, false, Some(1024), |_| {}),
+            Err(FlashError::TooLarge { .. })
+        ));
     }
 
     #[derive(Debug)]
