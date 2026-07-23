@@ -154,6 +154,15 @@ where
 
     fn spi_err(e: SPI::Error) -> FlashError<SPI::Error, RST::Error> { FlashError::Spi(e) }
     fn bus_err(e: RST::Error) -> FlashError<SPI::Error, RST::Error> { FlashError::Bus(e) }
+
+    /// Read the JEDEC ID (0x9F).
+    pub fn read_id(&mut self) -> Result<FlashId, FlashError<SPI::Error, RST::Error>> {
+        let mut id = [0u8; 3];
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_RDID]), Operation::Read(&mut id)])
+            .map_err(Self::spi_err)?;
+        Ok(FlashId { manufacturer: id[0], mem_type: id[1], capacity_code: id[2] })
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +180,15 @@ mod tests {
         assert_eq!(id.capacity_bytes(), Some(2 * 1024 * 1024)); // 16 Mbit = 2 MiB
         let bad = FlashId { manufacturer: 0, mem_type: 0, capacity_code: 0x00 };
         assert_eq!(bad.capacity_bytes(), None);
+    }
+
+    #[test]
+    fn read_id_returns_jedec() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let id = f.read_id().unwrap();
+        assert_eq!(id, FlashId { manufacturer: 0x20, mem_type: 0x20, capacity_code: 0x15 });
+        assert_eq!(id.capacity_bytes(), Some(2 * 1024 * 1024));
     }
 
     #[derive(Debug)]
