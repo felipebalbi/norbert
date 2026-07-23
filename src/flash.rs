@@ -163,6 +163,28 @@ where
             .map_err(Self::spi_err)?;
         Ok(FlashId { manufacturer: id[0], mem_type: id[1], capacity_code: id[2] })
     }
+
+    fn write_enable(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.spi.transaction(&mut [Operation::Write(&[CMD_WREN])]).map_err(Self::spi_err)
+    }
+
+    fn read_status(&mut self) -> Result<u8, FlashError<SPI::Error, RST::Error>> {
+        let mut sr = [0u8; 1];
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_RDSR]), Operation::Read(&mut sr)])
+            .map_err(Self::spi_err)?;
+        Ok(sr[0])
+    }
+
+    /// Poll RDSR until WIP clears, sleeping `poll_interval` between polls.
+    fn wait_ready(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        let start = std::time::Instant::now();
+        loop {
+            if self.read_status()? & SR_WIP == 0 { return Ok(()); }
+            if start.elapsed() >= self.poll_timeout { return Err(FlashError::Timeout); }
+            std::thread::sleep(self.poll_interval);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +211,25 @@ mod tests {
         let id = f.read_id().unwrap();
         assert_eq!(id, FlashId { manufacturer: 0x20, mem_type: 0x20, capacity_code: 0x15 });
         assert_eq!(id.capacity_bytes(), Some(2 * 1024 * 1024));
+    }
+
+    #[test]
+    fn wait_ready_polls_until_wip_clears() {
+        let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
+        flash.set_busy_reads(3); // WIP=1 for 3 RDSR calls, then clears
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.write_enable().unwrap();
+        assert_eq!(f.read_status().unwrap() & 0x02, 0x02); // WEL set
+        f.wait_ready().unwrap(); // consumes the 3 busy reads, then returns Ok
+    }
+
+    #[test]
+    fn wait_ready_times_out() {
+        let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
+        flash.set_busy_reads(u32::MAX); // never clears
+        let mut f = Flasher::with_config(
+            flash, FakeBus::new(), 256, Duration::ZERO, Duration::ZERO);
+        assert!(matches!(f.wait_ready(), Err(FlashError::Timeout)));
     }
 
     #[derive(Debug)]
