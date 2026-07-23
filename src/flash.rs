@@ -250,6 +250,50 @@ where
         }
         Ok(())
     }
+
+    /// Read `buf.len()` bytes starting at `offset`, in `max_chunk` units.
+    pub fn read(&mut self, offset: usize, buf: &mut [u8])
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        let mut done = 0;
+        while done < buf.len() {
+            let a = ((offset + done) as u32).to_be_bytes();
+            let header = [CMD_READ, a[1], a[2], a[3]];
+            let n = self.max_chunk.min(buf.len() - done);
+            self.spi
+                .transaction(&mut [
+                    Operation::Write(&header),
+                    Operation::Read(&mut buf[done..done + n]),
+                ])
+                .map_err(Self::spi_err)?;
+            done += n;
+        }
+        Ok(())
+    }
+
+    /// Read back and compare against `expected`. `progress(bytes_verified)` per chunk.
+    pub fn verify(&mut self, offset: usize, expected: &[u8], mut progress: impl FnMut(usize))
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        let mut done = 0;
+        let mut buf = vec![0u8; self.max_chunk];
+        while done < expected.len() {
+            let n = self.max_chunk.min(expected.len() - done);
+            self.read(offset + done, &mut buf[..n])?;
+            for i in 0..n {
+                if buf[i] != expected[done + i] {
+                    return Err(FlashError::VerifyMismatch {
+                        addr: offset + done + i,
+                        expected: expected[done + i],
+                        got: buf[i],
+                    });
+                }
+            }
+            done += n;
+            progress(done);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -337,6 +381,29 @@ mod tests {
         assert_eq!(&probe.mem()[250..250 + 300], &data[..]);
         // Byte just before the write is still erased.
         assert_eq!(probe.mem()[249], 0xFF);
+    }
+
+    #[test]
+    fn read_back_and_verify() {
+        let flash = FakeFlash::new(64 * 1024, [0x20, 0x20, 0x15]);
+        let mut f = flasher(flash, FakeBus::new(), 8); // tiny chunk exercises splitting
+        let data: Vec<u8> = (0..500).map(|i| (i * 7 % 256) as u8).collect();
+        f.erase_range(0, 500).unwrap();
+        f.program(0, &data, |_| {}).unwrap();
+
+        let mut buf = vec![0u8; 500];
+        f.read(0, &mut buf).unwrap();
+        assert_eq!(buf, data);
+
+        f.verify(0, &data, |_| {}).unwrap();
+
+        // A mismatch is reported with the absolute address.
+        let mut wrong = data.clone();
+        wrong[123] ^= 0xFF;
+        match f.verify(0, &wrong, |_| {}) {
+            Err(FlashError::VerifyMismatch { addr, .. }) => assert_eq!(addr, 123),
+            other => panic!("expected mismatch, got {other:?}"),
+        }
     }
 
     #[derive(Debug)]
