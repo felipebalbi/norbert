@@ -216,6 +216,40 @@ where
         }
         Ok(())
     }
+
+    fn page_program(&mut self, addr: u32, data: &[u8])
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        debug_assert!(data.len() <= PAGE_SIZE);
+        debug_assert!((addr as usize % PAGE_SIZE) + data.len() <= PAGE_SIZE, "page cross");
+        self.write_enable()?;
+        let a = addr.to_be_bytes();
+        let header = [CMD_PP, a[1], a[2], a[3]];
+        let mut ops: Vec<Operation<'_, u8>> = Vec::with_capacity(1 + data.len() / self.max_chunk + 1);
+        ops.push(Operation::Write(&header));
+        for chunk in data.chunks(self.max_chunk) {
+            ops.push(Operation::Write(chunk));
+        }
+        self.spi.transaction(&mut ops).map_err(Self::spi_err)?;
+        self.wait_ready()
+    }
+
+    /// Program `data` at `offset`, splitting on 256-byte page boundaries.
+    /// `progress(bytes_written)` is called after each page.
+    pub fn program(&mut self, offset: usize, data: &[u8], mut progress: impl FnMut(usize))
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        let mut written = 0;
+        while written < data.len() {
+            let addr = offset + written;
+            let page_left = PAGE_SIZE - (addr % PAGE_SIZE);
+            let n = page_left.min(data.len() - written);
+            self.page_program(addr as u32, &data[written..written + n])?;
+            written += n;
+            progress(written);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +320,23 @@ mod tests {
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.chip_erase().unwrap();
         assert!(probe.mem().iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn program_crossing_page_and_small_chunks() {
+        let flash = FakeFlash::new(64 * 1024, [0x20, 0x20, 0x15]);
+        let probe = flash.clone();
+        // max_chunk = 8 forces multi-op writes within a page program.
+        let mut f = flasher(flash, FakeBus::new(), 8);
+
+        // 300 bytes starting at 250 → crosses the 256 boundary (pages 0 and 1).
+        let data: Vec<u8> = (0..300).map(|i| (i % 251) as u8).collect();
+        f.erase_range(0, 300).unwrap();
+        f.program(250, &data, |_| {}).unwrap();
+
+        assert_eq!(&probe.mem()[250..250 + 300], &data[..]);
+        // Byte just before the write is still erased.
+        assert_eq!(probe.mem()[249], 0xFF);
     }
 
     #[derive(Debug)]
