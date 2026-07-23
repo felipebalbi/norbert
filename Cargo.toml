@@ -1,0 +1,15 @@
+[package]
+name = "norbert"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pico-de-gallo-hal = "0.6"
+pico-de-gallo-lib = "0.6"          # MAX_TRANSFER_SIZE, list_devices
+embedded-hal = "1.0"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+indicatif = "0.17"
+
+[profile.release]
+opt-level = 2
