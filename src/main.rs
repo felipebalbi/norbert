@@ -112,7 +112,9 @@ fn build_flasher(cli: &Cli) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device:
 // Helper: keep the Hal handle alive for the process lifetime.
 struct Connected2 { spi: pico_de_gallo_hal::SpiDev, bus: device::HostBus }
 fn keep_alive(conn: device::Connected) -> Connected2 {
-    // The SpiDev/Gpio handles are Arc-backed, but leak `_hal` to be safe.
+    // `Hal` owns the tokio runtime; SpiDev/Gpio only hold cloned Handles, which
+    // do NOT keep it alive. Leak `Hal` so the runtime outlives the handles for
+    // the whole process — this leak is required, not optional.
     Box::leak(Box::new(conn._hal));
     Connected2 { spi: conn.spi, bus: conn.bus }
 }
@@ -179,13 +181,18 @@ fn main() -> Result<()> {
             println!("verify ✓ ({} bytes)", image.len());
         }
         Cmd::Erase { offset, length, chip } => {
+            // Validate the erase target BEFORE acquiring the bus, so a missing
+            // argument can't leave a held master (e.g. the FPGA) stuck in reset.
+            let len = if *chip {
+                None
+            } else {
+                Some(length.context("erase needs --length N or --chip")?)
+            };
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let r = if *chip {
-                f.chip_erase().map_err(anyhow_from)
-            } else {
-                let len = length.context("erase needs --length N or --chip")?;
-                f.erase_range(*offset, len).map_err(anyhow_from)
+            let r = match len {
+                None => f.chip_erase().map_err(anyhow_from),
+                Some(len) => f.erase_range(*offset, len).map_err(anyhow_from),
             };
             let _ = f.release_bus();
             r?;
