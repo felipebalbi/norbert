@@ -14,7 +14,17 @@ const CMD_READ: u8 = 0x03;
 const CMD_PP:   u8 = 0x02;
 const CMD_CE:   u8 = 0xC7; // chip erase
 const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
+const CMD_EN4B: u8 = 0xB7; // enter 4-byte addressing mode
 const SR_WIP:   u8 = 0x01;
+
+/// Append `opcode` + a 3- or 4-byte big-endian address.
+fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, addr_bytes: u8) {
+    cmd.push(opcode);
+    if addr_bytes == 4 { cmd.push((addr >> 24) as u8); }
+    cmd.push((addr >> 16) as u8);
+    cmd.push((addr >> 8) as u8);
+    cmd.push(addr as u8);
+}
 
 /// 256-byte program page.
 pub const PAGE_SIZE:  usize = 256;
@@ -186,6 +196,11 @@ where
         self.spi.transaction(&mut [Operation::Write(&[CMD_WREN])]).map_err(Self::spi_err)
     }
 
+    /// Switch the device to 32-bit addressing (needed for >16 MB parts).
+    fn enter_4byte(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.spi.transaction(&mut [Operation::Write(&[CMD_EN4B])]).map_err(Self::spi_err)
+    }
+
     fn read_status(&mut self) -> Result<u8, FlashError<SPI::Error, RST::Error>> {
         let mut sr = [0u8; 1];
         self.spi
@@ -222,16 +237,24 @@ where
         }
         // 1) The chip describes itself.
         if let Some(profile) = self.try_sfdp_profile(id)? {
-            self.set_profile(profile.clone());
-            return Ok(profile);
+            return self.adopt_profile(profile);
         }
         // 2) A known no-SFDP part.
         if let Some(profile) = lookup_fallback(id.jedec()) {
-            self.set_profile(profile.clone());
-            return Ok(profile);
+            return self.adopt_profile(profile);
         }
         // 3) Present but unknown → don't guess.
         Err(FlashError::UnsupportedChip { jedec: id.jedec() })
+    }
+
+    /// Store `profile` in `self`, first putting >16 MB parts into 4-byte
+    /// addressing so subsequent read/erase/program headers match.
+    fn adopt_profile(&mut self, profile: FlashProfile)
+        -> Result<FlashProfile, FlashError<SPI::Error, RST::Error>>
+    {
+        if profile.address_bytes == 4 { self.enter_4byte()?; }
+        self.set_profile(profile.clone());
+        Ok(profile)
     }
 
     /// Build a profile from SFDP; `Ok(None)` if the chip has no usable SFDP.
@@ -269,9 +292,11 @@ where
 
     /// Erase one block/sector at `addr` using erase `opcode`.
     fn erase_op(&mut self, addr: u32, opcode: u8) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        let ab = self.require_profile()?.address_bytes;
         self.write_enable()?;
-        let a = addr.to_be_bytes();
-        self.spi.transaction(&mut [Operation::Write(&[opcode, a[1], a[2], a[3]])]).map_err(Self::spi_err)?;
+        let mut header = Vec::with_capacity(1 + ab as usize);
+        push_cmd_addr(&mut header, opcode, addr, ab);
+        self.spi.transaction(&mut [Operation::Write(&header)]).map_err(Self::spi_err)?;
         self.wait_ready()
     }
 
@@ -297,9 +322,10 @@ where
     fn page_program(&mut self, addr: u32, data: &[u8])
         -> Result<(), FlashError<SPI::Error, RST::Error>>
     {
+        let ab = self.require_profile()?.address_bytes;
         self.write_enable()?;
-        let a = addr.to_be_bytes();
-        let header = [CMD_PP, a[1], a[2], a[3]];
+        let mut header = Vec::with_capacity(1 + ab as usize);
+        push_cmd_addr(&mut header, CMD_PP, addr, ab);
         let mut ops: Vec<Operation<'_, u8>> = Vec::with_capacity(1 + data.len() / self.max_chunk + 1);
         ops.push(Operation::Write(&header));
         for chunk in data.chunks(self.max_chunk) {
@@ -331,10 +357,11 @@ where
     pub fn read(&mut self, offset: usize, buf: &mut [u8])
         -> Result<(), FlashError<SPI::Error, RST::Error>>
     {
+        let ab = self.require_profile()?.address_bytes;
         let mut done = 0;
         while done < buf.len() {
-            let a = ((offset + done) as u32).to_be_bytes();
-            let header = [CMD_READ, a[1], a[2], a[3]];
+            let mut header = Vec::with_capacity(1 + ab as usize);
+            push_cmd_addr(&mut header, CMD_READ, (offset + done) as u32, ab);
             let n = self.max_chunk.min(buf.len() - done);
             self.spi
                 .transaction(&mut [
@@ -672,6 +699,28 @@ mod tests {
         assert_eq!(f.profile().unwrap().source, crate::sfdp::ProfileSource::Sfdp);
     }
 
+    #[test]
+    fn four_byte_addressing_roundtrips() {
+        use crate::sfdp::{EraseType, FlashProfile, ProfileSource};
+        let flash = FakeFlash::new(1024 * 1024, [0xEF, 0x40, 0x19]); // pretend 256 Mbit part
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.set_profile(FlashProfile {
+            page_size: 256, address_bytes: 4, capacity: Some(32 * 1024 * 1024),
+            erase_types: vec![EraseType { size: 64 * 1024, opcode: 0xD8 }],
+            source: ProfileSource::Sfdp,
+        });
+        f.enter_4byte().unwrap(); // put the fake into 4-byte mode
+        let addr = 0x0002_0000;   // emitted as 4 bytes because the profile says so
+        let data: Vec<u8> = (0..600).map(|i| (i % 256) as u8).collect();
+        f.erase_range(addr, data.len()).unwrap();
+        f.program(addr, &data, |_| {}).unwrap();
+        let mut buf = vec![0u8; data.len()];
+        f.read(addr, &mut buf).unwrap();
+        assert_eq!(buf, data);
+        assert_eq!(&probe.mem()[addr..addr + data.len()], &data[..]);
+    }
+
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
@@ -684,6 +733,7 @@ mod tests {
         wel: bool,
         busy_reads: u32, // # of RDSR calls that report WIP=1 before clearing
         sfdp: Vec<u8>,
+        mode4b: bool,    // true once EN4B (0xB7) seen → 32-bit addresses
     }
 
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
@@ -694,7 +744,7 @@ mod tests {
     impl FakeFlash {
         fn new(size: usize, id: [u8; 3]) -> Self {
             FakeFlash(Rc::new(RefCell::new(FakeState {
-                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(),
+                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(), mode4b: false,
             })))
         }
         fn set_busy_reads(&self, n: u32) { self.0.borrow_mut().busy_reads = n; }
@@ -725,19 +775,23 @@ mod tests {
 
             let mut st = self.0.borrow_mut();
             let mut resp: Vec<u8> = Vec::new();
-            let addr24 = |m: &[u8]| -> usize {
-                u32::from_be_bytes([0, m[1], m[2], m[3]]) as usize
+            let ab = if st.mode4b { 4 } else { 3 };
+            let addr_at = |m: &[u8]| -> usize {
+                let mut a = 0usize;
+                for i in 0..ab { a = (a << 8) | m[1 + i] as usize; }
+                a
             };
             match mosi[0] {
                 CMD_RDID => resp.extend_from_slice(&st.id),
                 CMD_WREN => st.wel = true,
+                CMD_EN4B => st.mode4b = true,
                 CMD_RDSR => {
                     let wip = if st.busy_reads > 0 { st.busy_reads -= 1; SR_WIP } else { 0 };
                     let wel = if st.wel { 0x02 } else { 0 };
                     resp.push(wip | wel);
                 }
                 CMD_READ => {
-                    let a = addr24(&mosi);
+                    let a = addr_at(&mosi);
                     let total: usize = reads.iter().map(|r| r.len()).sum();
                     for i in 0..total { resp.push(*st.mem.get(a + i).unwrap_or(&0xFF)); }
                 }
@@ -747,9 +801,9 @@ mod tests {
                     for i in 0..total { resp.push(*st.sfdp.get(a + i).unwrap_or(&0xFF)); }
                 }
                 CMD_PP => {
-                    let a = addr24(&mosi);
+                    let a = addr_at(&mosi);
                     if st.wel {
-                        for (i, b) in mosi[4..].iter().enumerate() {
+                        for (i, b) in mosi[1 + ab..].iter().enumerate() {
                             let page = a & !(PAGE_SIZE - 1);
                             let off = (a + i - page) % PAGE_SIZE; // wraps within page
                             st.mem[page + off] &= *b;              // NOR: program clears bits
@@ -760,7 +814,7 @@ mod tests {
                 CMD_CE => { if st.wel { st.mem.iter_mut().for_each(|b| *b = 0xFF); } st.wel = false; }
                 op @ (0x20 | 0x52 | 0xD8) => {
                     let size = match op { 0x20 => 4 * 1024, 0x52 => 32 * 1024, _ => 64 * 1024 };
-                    let a = addr24(&mosi);
+                    let a = addr_at(&mosi);
                     if st.wel {
                         let base = a & !(size - 1);
                         for b in &mut st.mem[base..base + size] { *b = 0xFF; }
