@@ -122,10 +122,23 @@ enum Cmd {
     Unprotect,
     /// Flash soft-reset (0x66/0x99); also reboots a held master.
     Reset,
+    /// Wiring/power/speed check-up (read-only).
+    Doctor,
+    /// Read-back consistency check; with --sector N, a destructive sector self-test.
+    Test {
+        /// Destructively test sector N (backup, erase, pattern, verify, restore).
+        #[arg(long)]
+        sector: Option<usize>,
+    },
 }
 
 fn build_flasher(cli: &Cli) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
-    let conn = device::connect(cli.serial.as_deref(), cli.freq, cli.cs, cli.hold())?;
+    build_flasher_at(cli, cli.freq)
+}
+
+/// Like `build_flasher`, but at a caller-chosen SPI frequency (doctor steps freq).
+fn build_flasher_at(cli: &Cli, freq: u32) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
+    let conn = device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
     // Chunk to the firmware's max transfer for best throughput.
     let max_chunk = pico_de_gallo_lib::MAX_TRANSFER_SIZE.min(flash::PAGE_SIZE);
     let Connected2 { spi, bus } = keep_alive(conn);
@@ -383,6 +396,126 @@ fn run() -> Result<()> {
             let _ = f.release_bus(); // also reboots a held master
             r.map_err(anyhow_from)?;
             out.emit(voice::reset_done(), Some("OK"));
+        }
+        Cmd::Doctor => {
+            let out = Out::new(&cli);
+            // 1. RDID at --freq, bus held.
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let id_res = f.read_id();
+            // 3. SFDP readable? (still bus-held)
+            let sfdp_res = {
+                let mut hdr = [0u8; 8];
+                f.read_sfdp(0, &mut hdr).map(|_| sfdp::SfdpHeader::parse(&hdr).is_some())
+            };
+            let _ = f.release_bus();
+
+            let id = match id_res {
+                Ok(id) => id,
+                Err(e) => {
+                    // Connection worked but RDID failed → report and stop.
+                    println!("RDID: FAILED ({})", anyhow_from(e));
+                    out.emit(voice::doctor_rdid_fail(), Some("FAIL: rdid"));
+                    return Ok(());
+                }
+            };
+            println!("RDID @ {} Hz: {:02X} {:02X} {:02X}", cli.freq,
+                id.manufacturer, id.mem_type, id.capacity_code);
+            // 1b. Not present?
+            if !id.is_present() {
+                out.emit(voice::no_flash(), Some("FAIL: no chip"));
+                println!("  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio).");
+                return Ok(());
+            }
+            println!("chip: {}", catalog::describe(id.jedec()));
+            // 2. All three ID bytes equal → MISO/power suspicion.
+            if id.manufacturer == id.mem_type && id.mem_type == id.capacity_code {
+                println!("WARNING: all three JEDEC bytes are 0x{:02X} — MISO may be stuck or power/wiring is wrong.",
+                    id.manufacturer);
+            }
+            // 3. SFDP.
+            match sfdp_res {
+                Ok(true)  => println!("SFDP: present"),
+                Ok(false) => println!("SFDP: absent (will use the fallback table)"),
+                Err(e)    => println!("SFDP: read failed ({})", anyhow_from(e)),
+            }
+            // 4. Step SPI frequency and confirm RDID is identical each time.
+            let mut stable = true;
+            for freq in [1_000_000u32, 5_000_000, 10_000_000] {
+                match build_flasher_at(&cli, freq) {
+                    Ok(mut ff) => {
+                        if ff.acquire_bus().is_err() { println!("  {freq} Hz: bus acquire failed"); stable = false; continue; }
+                        let r = ff.read_id();
+                        let _ = ff.release_bus();
+                        match r {
+                            Ok(fid) if fid.jedec() == id.jedec() => println!("  {freq} Hz: {:02X} {:02X} {:02X} OK",
+                                fid.manufacturer, fid.mem_type, fid.capacity_code),
+                            Ok(fid) => { println!("  {freq} Hz: {:02X} {:02X} {:02X} MISMATCH", fid.manufacturer, fid.mem_type, fid.capacity_code); stable = false; }
+                            Err(e) => { println!("  {freq} Hz: read failed ({})", anyhow_from(e)); stable = false; }
+                        }
+                    }
+                    Err(e) => { println!("  {freq} Hz: connect failed ({e:#})"); stable = false; }
+                }
+            }
+            // 5. Summary.
+            if stable {
+                out.emit(voice::nothing_unusual(), Some("OK"));
+            } else {
+                out.emit(voice::doctor_unstable(), Some("WARN: unstable"));
+            }
+        }
+        Cmd::Test { sector } => {
+            let out = Out::new(&cli);
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let res = (|| -> Result<()> {
+                f.detect_profile().map_err(norbert_from)?;
+                match sector {
+                    None => {
+                        // Read-only bus-stability check: read the first 4 KiB twice, compare.
+                        let n = 4096;
+                        let mut a = vec![0u8; n];
+                        let mut b = vec![0u8; n];
+                        f.read(0, &mut a).map_err(anyhow_from)?;
+                        f.read(0, &mut b).map_err(anyhow_from)?;
+                        if a != b {
+                            return Err(anyhow::anyhow!(
+                                "read-back inconsistent between two reads — signal integrity suspect"));
+                        }
+                        Ok(())
+                    }
+                    Some(n) => {
+                        // Destructive on sector n: refuse if protected.
+                        if f.is_protected().map_err(anyhow_from)? {
+                            // Signal via a sentinel so the outer code can voice it.
+                            anyhow::bail!("__PROTECTED__");
+                        }
+                        let sec = f.profile().map(|p| p.min_erase()).unwrap_or(4096);
+                        let base = *n * sec;
+                        let mut backup = vec![0u8; sec];
+                        f.read(base, &mut backup).map_err(anyhow_from)?;
+                        f.erase_range(base, sec).map_err(anyhow_from)?;
+                        let pattern: Vec<u8> = (0..sec).map(|i| (i as u8) ^ 0xA5).collect();
+                        f.program(base, &pattern, |_| {}).map_err(anyhow_from)?;
+                        f.verify(base, &pattern, |_| {}).map_err(norbert_from)?;
+                        // Restore original contents.
+                        f.erase_range(base, sec).map_err(anyhow_from)?;
+                        f.program(base, &backup, |_| {}).map_err(anyhow_from)?;
+                        f.verify(base, &backup, |_| {}).map_err(anyhow_from)?;
+                        Ok(())
+                    }
+                }
+            })();
+            let _ = f.release_bus();
+            // Handle the protected sentinel with a voice line; otherwise propagate.
+            if let Err(e) = &res {
+                if e.to_string() == "__PROTECTED__" {
+                    out.emit(voice::protected(), Some("FAIL: protected"));
+                    std::process::exit(1);
+                }
+            }
+            res?;
+            out.emit(voice::nothing_unusual(), Some("OK"));
         }
     }
     Ok(())

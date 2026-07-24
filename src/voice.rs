@@ -23,8 +23,15 @@ pub fn unsupported(jedec: [u8; 3]) -> String {
     format!("I don't recognize this one.\n\nJEDEC {jedec:02X?} — no SFDP, and it's not in my book yet.")
 }
 pub fn reset_done() -> &'static str { "There. As if nothing happened." }
-#[allow(dead_code)] // wired in Task 24 (doctor/test)
 pub fn nothing_unusual() -> &'static str { "Nothing unusual." }
+/// doctor: the transport is up but RDID came back unreadable.
+pub fn doctor_rdid_fail() -> &'static str {
+    "I couldn't read the chip id.\n\nCheck the wiring and try again."
+}
+/// doctor: RDID drifts as the SPI clock climbs — signal-integrity hint.
+pub fn doctor_unstable() -> &'static str {
+    "Something's off at higher speeds.\n\nTry shorter leads or a lower --freq."
+}
 pub fn version() -> String { format!("Norbert {VERSION}\nReliable since Tuesday.") }
 
 #[cfg(test)]
