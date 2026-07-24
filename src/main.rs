@@ -1,6 +1,7 @@
 mod flash;
 mod sfdp;
 mod device;
+mod voice;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
