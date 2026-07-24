@@ -77,6 +77,9 @@ enum Cmd {
         /// Full chip erase instead of just the covered 64 KiB blocks.
         #[arg(long)]
         chip_erase: bool,
+        /// Clear status-register block-protection (BP) bits before erase/program.
+        #[arg(long)]
+        unprotect: bool,
     },
     /// Dump `length` bytes from `offset` to a file.
     Read {
@@ -161,7 +164,7 @@ fn main() -> Result<()> {
             let _ = f.release_bus();
             print_profile(&res?);
         }
-        Cmd::Write { bitstream, offset, no_verify, chip_erase } => {
+        Cmd::Write { bitstream, offset, no_verify, chip_erase, unprotect } => {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
@@ -173,6 +176,7 @@ fn main() -> Result<()> {
                 f.acquire_bus().map_err(anyhow_from)?;
                 let r = f.detect_profile().map_err(anyhow_from);
                 if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
+                if *unprotect { let r = f.unprotect().map_err(anyhow_from); if let Err(e) = r { let _ = f.release_bus(); return Err(e); } }
                 pb.set_message("chip erase…");
                 let r = f.chip_erase().map_err(anyhow_from);
                 if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
@@ -182,7 +186,7 @@ fn main() -> Result<()> {
                     .inspect_err(|_| { let _ = f.release_bus(); })?; }
                 f.release_bus().map_err(anyhow_from)?;
             } else {
-                let res = f.flash_bitstream(*offset, &image, true, !*no_verify, size, |p| {
+                let res = f.flash_bitstream(*offset, &image, true, *unprotect, !*no_verify, size, |p| {
                     pb.set_message(match p {
                         Progress::Detecting => "detecting flash (SFDP)…".to_string(),
                         Progress::Erasing => "erasing…".to_string(),

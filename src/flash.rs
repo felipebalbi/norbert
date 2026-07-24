@@ -9,6 +9,7 @@ use crate::sfdp::{lookup_fallback, plan_erase, Bfpt, FlashProfile, ParamHeader, 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
 const CMD_RDID: u8 = 0x9F;
 const CMD_WREN: u8 = 0x06;
+const CMD_WRSR: u8 = 0x01; // write status register (clears block-protect bits)
 const CMD_RDSR: u8 = 0x05;
 const CMD_READ: u8 = 0x03;
 const CMD_PP:   u8 = 0x02;
@@ -307,6 +308,13 @@ where
         self.wait_ready()
     }
 
+    /// Clear status-register block-protection bits (WREN + WRSR 0x00).
+    pub fn unprotect(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.write_enable()?;
+        self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, 0x00])]).map_err(Self::spi_err)?;
+        self.wait_ready()
+    }
+
     /// Erase every block overlapping `[offset, offset+len)`, choosing erase
     /// granularities from the detected profile (`sfdp::plan_erase`).
     pub fn erase_range(&mut self, offset: usize, len: usize)
@@ -415,6 +423,7 @@ where
         offset: usize,
         image: &[u8],
         detect: bool,
+        unprotect: bool,
         verify: bool,
         flash_size: Option<usize>,
         mut progress: impl FnMut(Progress),
@@ -430,6 +439,9 @@ where
                 let _ = self.release_bus();
                 return Err(FlashError::TooLarge { need: offset + image.len(), have: sz });
             }
+        }
+        if unprotect {
+            self.unprotect()?;
         }
         progress(Progress::Erasing);
         self.erase_range(offset, image.len())?;
@@ -565,7 +577,7 @@ mod tests {
 
         let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let mut events = Vec::new();
-        f.flash_bitstream(0, &image, false, true, Some(2 * 1024 * 1024), |p| events.push(p))
+        f.flash_bitstream(0, &image, false, false, true, Some(2 * 1024 * 1024), |p| events.push(p))
             .unwrap();
 
         assert_eq!(&probe.mem()[..1000], &image[..]);
@@ -585,7 +597,7 @@ mod tests {
         });
         let image = vec![0u8; 2048];
         assert!(matches!(
-            f.flash_bitstream(0, &image, false, false, None, |_| {}),
+            f.flash_bitstream(0, &image, false, false, false, None, |_| {}),
             Err(FlashError::TooLarge { .. })
         ));
     }
@@ -693,7 +705,7 @@ mod tests {
         let mut f = flasher(flash, FakeBus::new(), 256);
         let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let mut events = Vec::new();
-        f.flash_bitstream(0, &image, true, true, None, |p| events.push(p)).unwrap();
+        f.flash_bitstream(0, &image, true, false, true, None, |p| events.push(p)).unwrap();
         assert_eq!(events.first(), Some(&Progress::Detecting));
         assert_eq!(&probe.mem()[..1000], &image[..]);
         assert_eq!(f.profile().unwrap().source, crate::sfdp::ProfileSource::Sfdp);
@@ -721,6 +733,19 @@ mod tests {
         assert_eq!(&probe.mem()[addr..addr + data.len()], &data[..]);
     }
 
+    #[test]
+    fn unprotect_enables_programming() {
+        let flash = FakeFlash::new(1024, [0xEF, 0x40, 0x15]);
+        flash.set_protected(true);
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.program(0, &[1, 2, 3, 4], |_| {}).unwrap();
+        assert_eq!(&probe.mem()[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]); // blocked while protected
+        f.unprotect().unwrap();
+        f.program(0, &[1, 2, 3, 4], |_| {}).unwrap();
+        assert_eq!(&probe.mem()[0..4], &[1, 2, 3, 4]);             // now written
+    }
+
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
@@ -734,6 +759,7 @@ mod tests {
         busy_reads: u32, // # of RDSR calls that report WIP=1 before clearing
         sfdp: Vec<u8>,
         mode4b: bool,    // true once EN4B (0xB7) seen → 32-bit addresses
+        protected: bool, // true once BP bits set → PAGE PROGRAM silently no-ops
     }
 
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
@@ -744,11 +770,12 @@ mod tests {
     impl FakeFlash {
         fn new(size: usize, id: [u8; 3]) -> Self {
             FakeFlash(Rc::new(RefCell::new(FakeState {
-                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(), mode4b: false,
+                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(), mode4b: false, protected: false,
             })))
         }
         fn set_busy_reads(&self, n: u32) { self.0.borrow_mut().busy_reads = n; }
         fn set_sfdp(&self, blob: &[u8]) { self.0.borrow_mut().sfdp = blob.to_vec(); }
+        fn set_protected(&self, p: bool) { self.0.borrow_mut().protected = p; }
         fn mem(&self) -> Vec<u8> { self.0.borrow().mem.clone() }
         fn preset(&self, addr: usize, bytes: &[u8]) {
             self.0.borrow_mut().mem[addr..addr + bytes.len()].copy_from_slice(bytes);
@@ -800,9 +827,16 @@ mod tests {
                     let total: usize = reads.iter().map(|r| r.len()).sum();
                     for i in 0..total { resp.push(*st.sfdp.get(a + i).unwrap_or(&0xFF)); }
                 }
+                CMD_WRSR => {
+                    if st.wel {
+                        let sr = mosi.get(1).copied().unwrap_or(0);
+                        st.protected = sr & 0x1C != 0; // any BP bit set
+                    }
+                    st.wel = false;
+                }
                 CMD_PP => {
                     let a = addr_at(&mosi);
-                    if st.wel {
+                    if st.wel && !st.protected {
                         for (i, b) in mosi[1 + ab..].iter().enumerate() {
                             let page = a & !(PAGE_SIZE - 1);
                             let off = (a + i - page) % PAGE_SIZE; // wraps within page
