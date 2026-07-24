@@ -153,9 +153,19 @@ impl Bfpt {
         let d1 = dword(b, 1).unwrap_or(0);
         let address_bytes = if (d1 >> 17) & 0b11 == 2 { 4 } else { 3 };
 
-        let capacity = dword(b, 2).map(|d2| {
-            if d2 & 0x8000_0000 == 0 { (d2 as usize + 1) / 8 }
-            else { 1usize << ((d2 & 0x7FFF_FFFF) - 3) }
+        let capacity = dword(b, 2).and_then(|d2| {
+            if d2 & 0x8000_0000 == 0 {
+                Some((d2 as usize + 1) / 8)
+            } else {
+                // Defensive: garbage/corrupt SFDP can encode an out-of-range
+                // exponent; only shift when representable, else unknown capacity.
+                let n = d2 & 0x7FFF_FFFF;
+                if (3..usize::BITS).contains(&n) {
+                    Some(1usize << (n - 3))
+                } else {
+                    None
+                }
+            }
         });
 
         let mut erase_types = Vec::new();
@@ -166,7 +176,7 @@ impl Bfpt {
                 } else {
                     (((d >> 16) & 0xFF) as u8, ((d >> 24) & 0xFF) as u8)
                 };
-                if size_field != 0 {
+                if size_field != 0 && (size_field as u32) < usize::BITS {
                     erase_types.push(EraseType { size: 1usize << size_field, opcode });
                 }
             }
@@ -251,5 +261,15 @@ mod tests {
     fn header_signature_check() {
         assert!(SfdpHeader::parse(&[0x53, 0x46, 0x44, 0x50, 0x06, 0x01, 0x00, 0xFF]).is_some());
         assert!(SfdpHeader::parse(&[0xFF; 8]).is_none());
+    }
+
+    #[test]
+    fn bfpt_parse_survives_garbage_without_panicking() {
+        // Corrupt / all-0xFF SFDP (e.g. a flaky bus or a chip with no SFDP):
+        // parsing must not panic. Capacity is reported unknown and no absurd
+        // erase types are produced.
+        let bfpt = Bfpt::parse(&[0xFF; 11 * 4]);
+        assert_eq!(bfpt.capacity, None);
+        assert!(bfpt.erase_types.is_empty());
     }
 }
