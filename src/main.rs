@@ -145,7 +145,14 @@ fn keep_alive(conn: device::Connected) -> Connected2 {
     Connected2 { spi: conn.spi, bus: conn.bus }
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("{e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.version {
@@ -163,8 +170,9 @@ fn main() -> Result<()> {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let id = f.read_id().map_err(anyhow_from)?;
+            let r = f.read_id();
             let _ = f.release_bus();
+            let id = r.map_err(anyhow_from)?;
             out.emit(
                 &format!("{:02X} {:02X} {:02X}", id.manufacturer, id.mem_type, id.capacity_code),
                 Some(&format!("{:02X}{:02X}{:02X}", id.manufacturer, id.mem_type, id.capacity_code)),
