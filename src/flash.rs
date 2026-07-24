@@ -1,10 +1,12 @@
 //! Hardware-agnostic iCE40HX8K-EVB SPI-NOR flashing core.
 
 use core::fmt;
-use std::time::Duration;
 use embedded_hal::spi::{Operation, SpiDevice};
+use std::time::Duration;
 
-use crate::sfdp::{lookup_fallback, plan_erase, Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader};
+use crate::sfdp::{
+    lookup_fallback, plan_erase, Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader,
+};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
 const CMD_RDID: u8 = 0x9F;
@@ -12,26 +14,28 @@ const CMD_WREN: u8 = 0x06;
 const CMD_WRSR: u8 = 0x01; // write status register (clears block-protect bits)
 const CMD_RDSR: u8 = 0x05;
 const CMD_READ: u8 = 0x03;
-const CMD_PP:   u8 = 0x02;
-const CMD_CE:   u8 = 0xC7; // chip erase
+const CMD_PP: u8 = 0x02;
+const CMD_CE: u8 = 0xC7; // chip erase
 const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
 const CMD_EN4B: u8 = 0xB7; // enter 4-byte addressing mode
 const CMD_RSTEN: u8 = 0x66; // enable reset
-const CMD_RST:   u8 = 0x99; // software reset
-const SR_WIP:   u8 = 0x01;
+const CMD_RST: u8 = 0x99; // software reset
+const SR_WIP: u8 = 0x01;
 const SR_BP_MASK: u8 = 0x1C; // BP0..BP2 (typical)
 
 /// Append `opcode` + a 3- or 4-byte big-endian address.
 fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, addr_bytes: u8) {
     cmd.push(opcode);
-    if addr_bytes == 4 { cmd.push((addr >> 24) as u8); }
+    if addr_bytes == 4 {
+        cmd.push((addr >> 24) as u8);
+    }
     cmd.push((addr >> 16) as u8);
     cmd.push((addr >> 8) as u8);
     cmd.push(addr as u8);
 }
 
 /// 256-byte program page.
-pub const PAGE_SIZE:  usize = 256;
+pub const PAGE_SIZE: usize = 256;
 /// 64 KiB erase block.
 #[allow(dead_code)] // reference constant; used by tests (erase geometry now comes from FlashProfile)
 pub const BLOCK_SIZE: usize = 64 * 1024;
@@ -59,13 +63,18 @@ impl FlashId {
         self.manufacturer != 0x00 && self.manufacturer != 0xFF
     }
 
-    pub fn jedec(&self) -> [u8; 3] { [self.manufacturer, self.mem_type, self.capacity_code] }
+    pub fn jedec(&self) -> [u8; 3] {
+        [self.manufacturer, self.mem_type, self.capacity_code]
+    }
 }
 
 impl fmt::Display for FlashId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "mfr=0x{:02X} type=0x{:02X} cap=0x{:02X}",
-            self.manufacturer, self.mem_type, self.capacity_code)?;
+        write!(
+            f,
+            "mfr=0x{:02X} type=0x{:02X} cap=0x{:02X}",
+            self.manufacturer, self.mem_type, self.capacity_code
+        )?;
         if let Some(n) = self.capacity_bytes() {
             write!(f, " ({} KiB)", n / 1024)?;
         }
@@ -90,15 +99,19 @@ pub trait BusAccess {
 pub struct NoHold;
 impl BusAccess for NoHold {
     type Error = core::convert::Infallible;
-    fn acquire(&mut self) -> Result<(), Self::Error> { Ok(()) }
-    fn release(&mut self) -> Result<(), Self::Error> { Ok(()) }
+    fn acquire(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn release(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// Progress callback events for the high-level flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // full-flow helper; retained + tested, CLI drives the steps directly since Task 23b
 pub enum Progress {
-    Detecting,          // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
+    Detecting, // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
     Erasing,
     Programming(usize), // bytes written so far
     Verifying(usize),   // bytes verified so far
@@ -111,13 +124,23 @@ pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
     Spi(S),
     Bus(R),
     Timeout,
-    VerifyMismatch { addr: usize, expected: u8, got: u8 },
-    #[allow(dead_code)] // constructed by flash_bitstream (tested); CLI uses erase_range's own guard
-    TooLarge { need: usize, have: usize },
+    VerifyMismatch {
+        addr: usize,
+        expected: u8,
+        got: u8,
+    },
+    #[allow(dead_code)]
+    // constructed by flash_bitstream (tested); CLI uses erase_range's own guard
+    TooLarge {
+        need: usize,
+        have: usize,
+    },
     /// RDID read nothing — no chip on the bus.
     NoFlash,
     /// A chip responded but has no SFDP and no fallback-table entry.
-    UnsupportedChip { jedec: [u8; 3] },
+    UnsupportedChip {
+        jedec: [u8; 3],
+    },
     /// A geometry op was attempted before `detect_profile` succeeded.
     NotDetected,
 }
@@ -161,21 +184,41 @@ where
     /// Sensible defaults: 256-byte SPI chunks, 2 ms poll interval, 60 s timeout.
     #[allow(dead_code)] // library convenience (CLI uses with_config)
     pub fn new(spi: SPI, reset: RST) -> Self {
-        Self::with_config(spi, reset, PAGE_SIZE, Duration::from_millis(2), Duration::from_secs(60))
+        Self::with_config(
+            spi,
+            reset,
+            PAGE_SIZE,
+            Duration::from_millis(2),
+            Duration::from_secs(60),
+        )
     }
 
     /// `max_chunk` bounds bytes per USB SPI op; all writes/reads are split to it
     /// *within* a single CS transaction, so any value >= 4 is correct.
     pub fn with_config(
-        spi: SPI, reset: RST, max_chunk: usize,
-        poll_interval: Duration, poll_timeout: Duration,
+        spi: SPI,
+        reset: RST,
+        max_chunk: usize,
+        poll_interval: Duration,
+        poll_timeout: Duration,
     ) -> Self {
         assert!(max_chunk >= 4, "max_chunk must be >= 4");
-        Self { spi, reset, max_chunk, poll_interval, poll_timeout, profile: None }
+        Self {
+            spi,
+            reset,
+            max_chunk,
+            poll_interval,
+            poll_timeout,
+            profile: None,
+        }
     }
 
-    fn spi_err(e: SPI::Error) -> FlashError<SPI::Error, RST::Error> { FlashError::Spi(e) }
-    fn bus_err(e: RST::Error) -> FlashError<SPI::Error, RST::Error> { FlashError::Bus(e) }
+    fn spi_err(e: SPI::Error) -> FlashError<SPI::Error, RST::Error> {
+        FlashError::Spi(e)
+    }
+    fn bus_err(e: RST::Error) -> FlashError<SPI::Error, RST::Error> {
+        FlashError::Bus(e)
+    }
 
     /// Read the JEDEC ID (0x9F).
     pub fn read_id(&mut self) -> Result<FlashId, FlashError<SPI::Error, RST::Error>> {
@@ -183,14 +226,20 @@ where
         self.spi
             .transaction(&mut [Operation::Write(&[CMD_RDID]), Operation::Read(&mut id)])
             .map_err(Self::spi_err)?;
-        Ok(FlashId { manufacturer: id[0], mem_type: id[1], capacity_code: id[2] })
+        Ok(FlashId {
+            manufacturer: id[0],
+            mem_type: id[1],
+            capacity_code: id[2],
+        })
     }
 
     /// Read `buf.len()` bytes from SFDP space at `addr`
     /// (0x5A + 24-bit addr + 8 dummy cycles).
-    pub fn read_sfdp(&mut self, addr: u32, buf: &mut [u8])
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    pub fn read_sfdp(
+        &mut self,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let a = addr.to_be_bytes();
         let header = [CMD_SFDP, a[1], a[2], a[3], 0x00]; // trailing byte = 8 dummy cycles
         self.spi
@@ -199,12 +248,16 @@ where
     }
 
     fn write_enable(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        self.spi.transaction(&mut [Operation::Write(&[CMD_WREN])]).map_err(Self::spi_err)
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_WREN])])
+            .map_err(Self::spi_err)
     }
 
     /// Switch the device to 32-bit addressing (needed for >16 MB parts).
     fn enter_4byte(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        self.spi.transaction(&mut [Operation::Write(&[CMD_EN4B])]).map_err(Self::spi_err)
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_EN4B])])
+            .map_err(Self::spi_err)
     }
 
     fn read_status(&mut self) -> Result<u8, FlashError<SPI::Error, RST::Error>> {
@@ -219,15 +272,23 @@ where
     fn wait_ready(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let start = std::time::Instant::now();
         loop {
-            if self.read_status()? & SR_WIP == 0 { return Ok(()); }
-            if start.elapsed() >= self.poll_timeout { return Err(FlashError::Timeout); }
+            if self.read_status()? & SR_WIP == 0 {
+                return Ok(());
+            }
+            if start.elapsed() >= self.poll_timeout {
+                return Err(FlashError::Timeout);
+            }
             std::thread::sleep(self.poll_interval);
         }
     }
 
     /// Active flash profile, or `None` until `detect_profile` succeeds.
-    pub fn profile(&self) -> Option<&FlashProfile> { self.profile.as_ref() }
-    pub fn set_profile(&mut self, profile: FlashProfile) { self.profile = Some(profile); }
+    pub fn profile(&self) -> Option<&FlashProfile> {
+        self.profile.as_ref()
+    }
+    pub fn set_profile(&mut self, profile: FlashProfile) {
+        self.profile = Some(profile);
+    }
 
     fn require_profile(&self) -> Result<&FlashProfile, FlashError<SPI::Error, RST::Error>> {
         self.profile.as_ref().ok_or(FlashError::NotDetected)
@@ -255,31 +316,42 @@ where
 
     /// Store `profile` in `self`, first putting >16 MB parts into 4-byte
     /// addressing so subsequent read/erase/program headers match.
-    fn adopt_profile(&mut self, profile: FlashProfile)
-        -> Result<FlashProfile, FlashError<SPI::Error, RST::Error>>
-    {
-        if profile.address_bytes == 4 { self.enter_4byte()?; }
+    fn adopt_profile(
+        &mut self,
+        profile: FlashProfile,
+    ) -> Result<FlashProfile, FlashError<SPI::Error, RST::Error>> {
+        if profile.address_bytes == 4 {
+            self.enter_4byte()?;
+        }
         self.set_profile(profile.clone());
         Ok(profile)
     }
 
     /// Build a profile from SFDP; `Ok(None)` if the chip has no usable SFDP.
-    fn try_sfdp_profile(&mut self, id: FlashId)
-        -> Result<Option<FlashProfile>, FlashError<SPI::Error, RST::Error>>
-    {
+    fn try_sfdp_profile(
+        &mut self,
+        id: FlashId,
+    ) -> Result<Option<FlashProfile>, FlashError<SPI::Error, RST::Error>> {
         let mut header = [0u8; 8];
         self.read_sfdp(0, &mut header)?;
-        let Some(h) = SfdpHeader::parse(&header) else { return Ok(None); };
+        let Some(h) = SfdpHeader::parse(&header) else {
+            return Ok(None);
+        };
 
         let mut bfpt_ph = None;
         for i in 0..h.param_header_count() {
             let mut ph = [0u8; 8];
             self.read_sfdp(8 + (i as u32) * 8, &mut ph)?;
             if let Some(p) = ParamHeader::parse(&ph) {
-                if p.id == ParamHeader::BFPT_ID { bfpt_ph = Some(p); break; }
+                if p.id == ParamHeader::BFPT_ID {
+                    bfpt_ph = Some(p);
+                    break;
+                }
             }
         }
-        let Some(p) = bfpt_ph else { return Ok(None); };
+        let Some(p) = bfpt_ph else {
+            return Ok(None);
+        };
 
         let mut bytes = vec![0u8; p.length_dwords as usize * 4];
         self.read_sfdp(p.table_pointer, &mut bytes)?;
@@ -297,26 +369,36 @@ where
     }
 
     /// Erase one block/sector at `addr` using erase `opcode`.
-    fn erase_op(&mut self, addr: u32, opcode: u8) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+    fn erase_op(
+        &mut self,
+        addr: u32,
+        opcode: u8,
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let ab = self.require_profile()?.address_bytes;
         self.write_enable()?;
         let mut header = Vec::with_capacity(1 + ab as usize);
         push_cmd_addr(&mut header, opcode, addr, ab);
-        self.spi.transaction(&mut [Operation::Write(&header)]).map_err(Self::spi_err)?;
+        self.spi
+            .transaction(&mut [Operation::Write(&header)])
+            .map_err(Self::spi_err)?;
         self.wait_ready()
     }
 
     /// Erase the whole device (0xC7). Slowest but universally supported.
     pub fn chip_erase(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.write_enable()?;
-        self.spi.transaction(&mut [Operation::Write(&[CMD_CE])]).map_err(Self::spi_err)?;
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_CE])])
+            .map_err(Self::spi_err)?;
         self.wait_ready()
     }
 
     /// Clear status-register block-protection bits (WREN + WRSR 0x00).
     pub fn unprotect(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.write_enable()?;
-        self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, 0x00])]).map_err(Self::spi_err)?;
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_WRSR, 0x00])])
+            .map_err(Self::spi_err)?;
         self.wait_ready()
     }
 
@@ -328,21 +410,29 @@ where
     /// Set block-protection (WREN + WRSR with BP bits set).
     pub fn protect(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.write_enable()?;
-        self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, SR_BP_MASK])]).map_err(Self::spi_err)?;
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_WRSR, SR_BP_MASK])])
+            .map_err(Self::spi_err)?;
         self.wait_ready()
     }
 
     /// Flash software reset: 0x66 (enable) then 0x99 (reset).
     pub fn reset_flash(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        self.spi.transaction(&mut [Operation::Write(&[CMD_RSTEN])]).map_err(Self::spi_err)?;
-        self.spi.transaction(&mut [Operation::Write(&[CMD_RST])]).map_err(Self::spi_err)
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_RSTEN])])
+            .map_err(Self::spi_err)?;
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_RST])])
+            .map_err(Self::spi_err)
     }
 
     /// Erase every block overlapping `[offset, offset+len)`, choosing erase
     /// granularities from the detected profile (`sfdp::plan_erase`).
-    pub fn erase_range(&mut self, offset: usize, len: usize)
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    pub fn erase_range(
+        &mut self,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let plan = plan_erase(self.require_profile()?, offset, len);
         for (addr, opcode) in plan {
             self.erase_op(addr as u32, opcode)?;
@@ -350,14 +440,17 @@ where
         Ok(())
     }
 
-    fn page_program(&mut self, addr: u32, data: &[u8])
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    fn page_program(
+        &mut self,
+        addr: u32,
+        data: &[u8],
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let ab = self.require_profile()?.address_bytes;
         self.write_enable()?;
         let mut header = Vec::with_capacity(1 + ab as usize);
         push_cmd_addr(&mut header, CMD_PP, addr, ab);
-        let mut ops: Vec<Operation<'_, u8>> = Vec::with_capacity(1 + data.len() / self.max_chunk + 1);
+        let mut ops: Vec<Operation<'_, u8>> =
+            Vec::with_capacity(1 + data.len() / self.max_chunk + 1);
         ops.push(Operation::Write(&header));
         for chunk in data.chunks(self.max_chunk) {
             ops.push(Operation::Write(chunk));
@@ -368,9 +461,12 @@ where
 
     /// Program `data` at `offset`, splitting on the profile's page boundaries.
     /// `progress(bytes_written)` is called after each page.
-    pub fn program(&mut self, offset: usize, data: &[u8], mut progress: impl FnMut(usize))
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    pub fn program(
+        &mut self,
+        offset: usize,
+        data: &[u8],
+        mut progress: impl FnMut(usize),
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let page = self.require_profile()?.page_size;
         let mut written = 0;
         while written < data.len() {
@@ -385,9 +481,11 @@ where
     }
 
     /// Read `buf.len()` bytes starting at `offset`, in `max_chunk` units.
-    pub fn read(&mut self, offset: usize, buf: &mut [u8])
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    pub fn read(
+        &mut self,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let ab = self.require_profile()?.address_bytes;
         let mut done = 0;
         while done < buf.len() {
@@ -406,9 +504,12 @@ where
     }
 
     /// Read back and compare against `expected`. `progress(bytes_verified)` per chunk.
-    pub fn verify(&mut self, offset: usize, expected: &[u8], mut progress: impl FnMut(usize))
-        -> Result<(), FlashError<SPI::Error, RST::Error>>
-    {
+    pub fn verify(
+        &mut self,
+        offset: usize,
+        expected: &[u8],
+        mut progress: impl FnMut(usize),
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         let mut done = 0;
         let mut buf = vec![0u8; self.max_chunk];
         while done < expected.len() {
@@ -461,7 +562,10 @@ where
         if let Some(sz) = size {
             if offset + image.len() > sz {
                 let _ = self.release_bus();
-                return Err(FlashError::TooLarge { need: offset + image.len(), have: sz });
+                return Err(FlashError::TooLarge {
+                    need: offset + image.len(),
+                    have: sz,
+                });
             }
         }
         if unprotect {
@@ -492,9 +596,17 @@ mod tests {
 
     #[test]
     fn capacity_decode() {
-        let id = FlashId { manufacturer: 0x20, mem_type: 0x20, capacity_code: 0x15 };
+        let id = FlashId {
+            manufacturer: 0x20,
+            mem_type: 0x20,
+            capacity_code: 0x15,
+        };
         assert_eq!(id.capacity_bytes(), Some(2 * 1024 * 1024)); // 16 Mbit = 2 MiB
-        let bad = FlashId { manufacturer: 0, mem_type: 0, capacity_code: 0x00 };
+        let bad = FlashId {
+            manufacturer: 0,
+            mem_type: 0,
+            capacity_code: 0x00,
+        };
         assert_eq!(bad.capacity_bytes(), None);
     }
 
@@ -503,7 +615,14 @@ mod tests {
         let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
         let mut f = flasher(flash, FakeBus::new(), 256);
         let id = f.read_id().unwrap();
-        assert_eq!(id, FlashId { manufacturer: 0x20, mem_type: 0x20, capacity_code: 0x15 });
+        assert_eq!(
+            id,
+            FlashId {
+                manufacturer: 0x20,
+                mem_type: 0x20,
+                capacity_code: 0x15
+            }
+        );
         assert_eq!(id.capacity_bytes(), Some(2 * 1024 * 1024));
     }
 
@@ -521,8 +640,8 @@ mod tests {
     fn wait_ready_times_out() {
         let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
         flash.set_busy_reads(u32::MAX); // never clears
-        let mut f = Flasher::with_config(
-            flash, FakeBus::new(), 256, Duration::ZERO, Duration::ZERO);
+        let mut f =
+            Flasher::with_config(flash, FakeBus::new(), 256, Duration::ZERO, Duration::ZERO);
         assert!(matches!(f.wait_ready(), Err(FlashError::Timeout)));
     }
 
@@ -530,21 +649,25 @@ mod tests {
     fn erase_range_sets_ff_across_covered_blocks() {
         let size = 256 * 1024; // 4 blocks
         let flash = FakeFlash::new(size, [0x20, 0x20, 0x15]);
-        for i in 0..size { flash.preset(i, &[0x00]); } // dirty everything
+        for i in 0..size {
+            flash.preset(i, &[0x00]);
+        } // dirty everything
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
 
         // A 1-byte image at offset 100 must erase exactly block 0 (0..64K).
         f.erase_range(100, 1).unwrap();
         let mem = probe.mem();
-        assert!(mem[0..BLOCK_SIZE].iter().all(|&b| b == 0xFF));      // block 0 erased
-        assert!(mem[BLOCK_SIZE..].iter().all(|&b| b == 0x00));        // block 1+ untouched
+        assert!(mem[0..BLOCK_SIZE].iter().all(|&b| b == 0xFF)); // block 0 erased
+        assert!(mem[BLOCK_SIZE..].iter().all(|&b| b == 0x00)); // block 1+ untouched
     }
 
     #[test]
     fn chip_erase_clears_all() {
         let flash = FakeFlash::new(BLOCK_SIZE, [0x20, 0x20, 0x15]);
-        for i in 0..BLOCK_SIZE { flash.preset(i, &[0x00]); }
+        for i in 0..BLOCK_SIZE {
+            flash.preset(i, &[0x00]);
+        }
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.chip_erase().unwrap();
@@ -601,11 +724,16 @@ mod tests {
 
         let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let mut events = Vec::new();
-        f.flash_bitstream(0, &image, false, false, true, Some(2 * 1024 * 1024), |p| events.push(p))
-            .unwrap();
+        f.flash_bitstream(0, &image, false, false, true, Some(2 * 1024 * 1024), |p| {
+            events.push(p)
+        })
+        .unwrap();
 
         assert_eq!(&probe.mem()[..1000], &image[..]);
-        assert!(!reset_probe.asserted(), "CRESET must be released at the end");
+        assert!(
+            !reset_probe.asserted(),
+            "CRESET must be released at the end"
+        );
         assert_eq!(events.first(), Some(&Progress::Erasing));
         assert_eq!(events.last(), Some(&Progress::Done));
     }
@@ -615,8 +743,13 @@ mod tests {
         let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
         let mut f = flasher(flash, FakeBus::new(), 64);
         f.set_profile(crate::sfdp::FlashProfile {
-            page_size: 256, address_bytes: 3, capacity: Some(1024),
-            erase_types: vec![crate::sfdp::EraseType { size: 64 * 1024, opcode: 0xD8 }],
+            page_size: 256,
+            address_bytes: 3,
+            capacity: Some(1024),
+            erase_types: vec![crate::sfdp::EraseType {
+                size: 64 * 1024,
+                opcode: 0xD8,
+            }],
             source: crate::sfdp::ProfileSource::Table,
         });
         let image = vec![0u8; 2048];
@@ -631,27 +764,43 @@ mod tests {
         use crate::sfdp::{EraseType, FlashProfile, ProfileSource};
         let size = 256 * 1024;
         let flash = FakeFlash::new(size, [0xEF, 0x40, 0x15]);
-        for i in 0..size { flash.preset(i, &[0x00]); }
+        for i in 0..size {
+            flash.preset(i, &[0x00]);
+        }
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.set_profile(FlashProfile {
-            page_size: 256, address_bytes: 3, capacity: Some(size),
+            page_size: 256,
+            address_bytes: 3,
+            capacity: Some(size),
             erase_types: vec![
-                EraseType { size: 64 * 1024, opcode: 0xD8 },
-                EraseType { size: 4 * 1024, opcode: 0x20 },
+                EraseType {
+                    size: 64 * 1024,
+                    opcode: 0xD8,
+                },
+                EraseType {
+                    size: 4 * 1024,
+                    opcode: 0x20,
+                },
             ],
             source: ProfileSource::Sfdp,
         });
         f.erase_range(0, 131_072 + 100).unwrap();
         let mem = probe.mem();
         assert!(mem[0..131_072 + 4096].iter().all(|&b| b == 0xFF)); // erased through tail sector
-        assert!(mem[131_072 + 4096..].iter().all(|&b| b == 0x00));   // nothing beyond
+        assert!(mem[131_072 + 4096..].iter().all(|&b| b == 0x00)); // nothing beyond
     }
 
     #[test]
     fn erase_without_profile_is_not_detected() {
         let flash = FakeFlash::new(1024, [0xEF, 0x40, 0x15]);
-        let mut f = Flasher::with_config(flash, FakeBus::new(), 256, Duration::ZERO, Duration::from_secs(1));
+        let mut f = Flasher::with_config(
+            flash,
+            FakeBus::new(),
+            256,
+            Duration::ZERO,
+            Duration::from_secs(1),
+        );
         assert!(matches!(f.erase_range(0, 10), Err(FlashError::NotDetected)));
     }
 
@@ -702,7 +851,13 @@ mod tests {
         let p = f.detect_profile().unwrap();
         assert_eq!(p.source, ProfileSource::Table);
         assert_eq!(p.capacity, Some(2 * 1024 * 1024));
-        assert_eq!(p.erase_types, vec![EraseType { size: 64 * 1024, opcode: 0xD8 }]);
+        assert_eq!(
+            p.erase_types,
+            vec![EraseType {
+                size: 64 * 1024,
+                opcode: 0xD8
+            }]
+        );
     }
 
     #[test]
@@ -710,7 +865,10 @@ mod tests {
         // A chip responds, but no SFDP and not in the table.
         let flash = FakeFlash::new(1024, [0xAB, 0xCD, 0xEF]);
         let mut f = flasher(flash, FakeBus::new(), 256);
-        assert!(matches!(f.detect_profile(), Err(FlashError::UnsupportedChip { .. })));
+        assert!(matches!(
+            f.detect_profile(),
+            Err(FlashError::UnsupportedChip { .. })
+        ));
     }
 
     #[test]
@@ -729,10 +887,14 @@ mod tests {
         let mut f = flasher(flash, FakeBus::new(), 256);
         let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let mut events = Vec::new();
-        f.flash_bitstream(0, &image, true, false, true, None, |p| events.push(p)).unwrap();
+        f.flash_bitstream(0, &image, true, false, true, None, |p| events.push(p))
+            .unwrap();
         assert_eq!(events.first(), Some(&Progress::Detecting));
         assert_eq!(&probe.mem()[..1000], &image[..]);
-        assert_eq!(f.profile().unwrap().source, crate::sfdp::ProfileSource::Sfdp);
+        assert_eq!(
+            f.profile().unwrap().source,
+            crate::sfdp::ProfileSource::Sfdp
+        );
     }
 
     #[test]
@@ -742,12 +904,17 @@ mod tests {
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.set_profile(FlashProfile {
-            page_size: 256, address_bytes: 4, capacity: Some(32 * 1024 * 1024),
-            erase_types: vec![EraseType { size: 64 * 1024, opcode: 0xD8 }],
+            page_size: 256,
+            address_bytes: 4,
+            capacity: Some(32 * 1024 * 1024),
+            erase_types: vec![EraseType {
+                size: 64 * 1024,
+                opcode: 0xD8,
+            }],
             source: ProfileSource::Sfdp,
         });
         f.enter_4byte().unwrap(); // put the fake into 4-byte mode
-        let addr = 0x0002_0000;   // emitted as 4 bytes because the profile says so
+        let addr = 0x0002_0000; // emitted as 4 bytes because the profile says so
         let data: Vec<u8> = (0..600).map(|i| (i % 256) as u8).collect();
         f.erase_range(addr, data.len()).unwrap();
         f.program(addr, &data, |_| {}).unwrap();
@@ -767,7 +934,7 @@ mod tests {
         assert_eq!(&probe.mem()[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]); // blocked while protected
         f.unprotect().unwrap();
         f.program(0, &[1, 2, 3, 4], |_| {}).unwrap();
-        assert_eq!(&probe.mem()[0..4], &[1, 2, 3, 4]);             // now written
+        assert_eq!(&probe.mem()[0..4], &[1, 2, 3, 4]); // now written
     }
 
     #[test]
@@ -791,7 +958,9 @@ mod tests {
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
-        fn kind(&self) -> ErrorKind { ErrorKind::Other }
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other
+        }
     }
 
     struct FakeState {
@@ -812,19 +981,35 @@ mod tests {
     impl FakeFlash {
         fn new(size: usize, id: [u8; 3]) -> Self {
             FakeFlash(Rc::new(RefCell::new(FakeState {
-                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(), mode4b: false, protected: false,
+                mem: vec![0xFF; size],
+                id,
+                wel: false,
+                busy_reads: 0,
+                sfdp: Vec::new(),
+                mode4b: false,
+                protected: false,
             })))
         }
-        fn set_busy_reads(&self, n: u32) { self.0.borrow_mut().busy_reads = n; }
-        fn set_sfdp(&self, blob: &[u8]) { self.0.borrow_mut().sfdp = blob.to_vec(); }
-        fn set_protected(&self, p: bool) { self.0.borrow_mut().protected = p; }
-        fn mem(&self) -> Vec<u8> { self.0.borrow().mem.clone() }
+        fn set_busy_reads(&self, n: u32) {
+            self.0.borrow_mut().busy_reads = n;
+        }
+        fn set_sfdp(&self, blob: &[u8]) {
+            self.0.borrow_mut().sfdp = blob.to_vec();
+        }
+        fn set_protected(&self, p: bool) {
+            self.0.borrow_mut().protected = p;
+        }
+        fn mem(&self) -> Vec<u8> {
+            self.0.borrow().mem.clone()
+        }
         fn preset(&self, addr: usize, bytes: &[u8]) {
             self.0.borrow_mut().mem[addr..addr + bytes.len()].copy_from_slice(bytes);
         }
     }
 
-    impl ErrorType for FakeFlash { type Error = FakeErr; }
+    impl ErrorType for FakeFlash {
+        type Error = FakeErr;
+    }
 
     impl SpiDevice for FakeFlash {
         fn transaction(&mut self, ops: &mut [Operation<'_, u8>]) -> Result<(), FakeErr> {
@@ -835,19 +1020,30 @@ mod tests {
                 match op {
                     Operation::Write(w) => mosi.extend_from_slice(w),
                     Operation::Read(r) => reads.push(r),
-                    Operation::Transfer(r, w) => { mosi.extend_from_slice(w); reads.push(r); }
-                    Operation::TransferInPlace(b) => { let c = b.to_vec(); mosi.extend_from_slice(&c); reads.push(b); }
+                    Operation::Transfer(r, w) => {
+                        mosi.extend_from_slice(w);
+                        reads.push(r);
+                    }
+                    Operation::TransferInPlace(b) => {
+                        let c = b.to_vec();
+                        mosi.extend_from_slice(&c);
+                        reads.push(b);
+                    }
                     Operation::DelayNs(_) => {}
                 }
             }
-            if mosi.is_empty() { return Ok(()); }
+            if mosi.is_empty() {
+                return Ok(());
+            }
 
             let mut st = self.0.borrow_mut();
             let mut resp: Vec<u8> = Vec::new();
             let ab = if st.mode4b { 4 } else { 3 };
             let addr_at = |m: &[u8]| -> usize {
                 let mut a = 0usize;
-                for i in 0..ab { a = (a << 8) | m[1 + i] as usize; }
+                for i in 0..ab {
+                    a = (a << 8) | m[1 + i] as usize;
+                }
                 a
             };
             match mosi[0] {
@@ -855,20 +1051,29 @@ mod tests {
                 CMD_WREN => st.wel = true,
                 CMD_EN4B => st.mode4b = true,
                 CMD_RDSR => {
-                    let wip = if st.busy_reads > 0 { st.busy_reads -= 1; SR_WIP } else { 0 };
+                    let wip = if st.busy_reads > 0 {
+                        st.busy_reads -= 1;
+                        SR_WIP
+                    } else {
+                        0
+                    };
                     let wel = if st.wel { 0x02 } else { 0 };
-                    let bp  = if st.protected { 0x1C } else { 0 };
+                    let bp = if st.protected { 0x1C } else { 0 };
                     resp.push(wip | wel | bp);
                 }
                 CMD_READ => {
                     let a = addr_at(&mosi);
                     let total: usize = reads.iter().map(|r| r.len()).sum();
-                    for i in 0..total { resp.push(*st.mem.get(a + i).unwrap_or(&0xFF)); }
+                    for i in 0..total {
+                        resp.push(*st.mem.get(a + i).unwrap_or(&0xFF));
+                    }
                 }
                 CMD_SFDP => {
                     let a = u32::from_be_bytes([0, mosi[1], mosi[2], mosi[3]]) as usize;
                     let total: usize = reads.iter().map(|r| r.len()).sum();
-                    for i in 0..total { resp.push(*st.sfdp.get(a + i).unwrap_or(&0xFF)); }
+                    for i in 0..total {
+                        resp.push(*st.sfdp.get(a + i).unwrap_or(&0xFF));
+                    }
                 }
                 CMD_WRSR => {
                     if st.wel {
@@ -883,18 +1088,29 @@ mod tests {
                         for (i, b) in mosi[1 + ab..].iter().enumerate() {
                             let page = a & !(PAGE_SIZE - 1);
                             let off = (a + i - page) % PAGE_SIZE; // wraps within page
-                            st.mem[page + off] &= *b;              // NOR: program clears bits
+                            st.mem[page + off] &= *b; // NOR: program clears bits
                         }
                     }
                     st.wel = false;
                 }
-                CMD_CE => { if st.wel { st.mem.iter_mut().for_each(|b| *b = 0xFF); } st.wel = false; }
+                CMD_CE => {
+                    if st.wel {
+                        st.mem.iter_mut().for_each(|b| *b = 0xFF);
+                    }
+                    st.wel = false;
+                }
                 op @ (0x20 | 0x52 | 0xD8) => {
-                    let size = match op { 0x20 => 4 * 1024, 0x52 => 32 * 1024, _ => 64 * 1024 };
+                    let size = match op {
+                        0x20 => 4 * 1024,
+                        0x52 => 32 * 1024,
+                        _ => 64 * 1024,
+                    };
                     let a = addr_at(&mosi);
                     if st.wel {
                         let base = a & !(size - 1);
-                        for b in &mut st.mem[base..base + size] { *b = 0xFF; }
+                        for b in &mut st.mem[base..base + size] {
+                            *b = 0xFF;
+                        }
                     }
                     st.wel = false;
                 }
@@ -902,7 +1118,10 @@ mod tests {
             }
             let mut ri = 0;
             for r in reads.iter_mut() {
-                for b in r.iter_mut() { *b = *resp.get(ri).unwrap_or(&0xFF); ri += 1; }
+                for b in r.iter_mut() {
+                    *b = *resp.get(ri).unwrap_or(&0xFF);
+                    ri += 1;
+                }
             }
             Ok(())
         }
@@ -911,22 +1130,44 @@ mod tests {
     /// Shareable reset line; `true` = asserted (FPGA held in reset).
     #[derive(Clone)]
     struct FakeBus(Rc<RefCell<bool>>);
-    impl FakeBus { fn new() -> Self { FakeBus(Rc::new(RefCell::new(false))) } fn asserted(&self) -> bool { *self.0.borrow() } }
+    impl FakeBus {
+        fn new() -> Self {
+            FakeBus(Rc::new(RefCell::new(false)))
+        }
+        fn asserted(&self) -> bool {
+            *self.0.borrow()
+        }
+    }
     impl BusAccess for FakeBus {
         type Error = Infallible;
-        fn acquire(&mut self) -> Result<(), Infallible> { *self.0.borrow_mut() = true; Ok(()) }
-        fn release(&mut self) -> Result<(), Infallible> { *self.0.borrow_mut() = false; Ok(()) }
+        fn acquire(&mut self) -> Result<(), Infallible> {
+            *self.0.borrow_mut() = true;
+            Ok(())
+        }
+        fn release(&mut self) -> Result<(), Infallible> {
+            *self.0.borrow_mut() = false;
+            Ok(())
+        }
     }
 
     /// Fast Flasher over the fakes (zero poll interval so tests don't sleep),
     /// pre-loaded with a default profile so geometry ops resolve.
-    fn flasher(flash: FakeFlash, bus: FakeBus, max_chunk: usize)
-        -> Flasher<FakeFlash, FakeBus>
-    {
-        let mut f = Flasher::with_config(flash, bus, max_chunk, Duration::ZERO, Duration::from_secs(1));
+    fn flasher(flash: FakeFlash, bus: FakeBus, max_chunk: usize) -> Flasher<FakeFlash, FakeBus> {
+        let mut f = Flasher::with_config(
+            flash,
+            bus,
+            max_chunk,
+            Duration::ZERO,
+            Duration::from_secs(1),
+        );
         f.set_profile(crate::sfdp::FlashProfile {
-            page_size: 256, address_bytes: 3, capacity: Some(2 * 1024 * 1024),
-            erase_types: vec![crate::sfdp::EraseType { size: 64 * 1024, opcode: 0xD8 }],
+            page_size: 256,
+            address_bytes: 3,
+            capacity: Some(2 * 1024 * 1024),
+            erase_types: vec![crate::sfdp::EraseType {
+                size: 64 * 1024,
+                opcode: 0xD8,
+            }],
             source: crate::sfdp::ProfileSource::Table,
         });
         f

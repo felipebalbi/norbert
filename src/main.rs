@@ -1,8 +1,8 @@
+mod catalog;
+mod device;
 mod flash;
 mod sfdp;
-mod device;
 mod voice;
-mod catalog;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -14,7 +14,12 @@ use device::{HoldConfig, Level, Release};
 use flash::{FlashError, Flasher};
 
 #[derive(Parser)]
-#[command(name = "norbert", about = "A patient SPI-NOR flasher", disable_version_flag = true, arg_required_else_help = true)]
+#[command(
+    name = "norbert",
+    about = "A patient SPI-NOR flasher",
+    disable_version_flag = true,
+    arg_required_else_help = true
+)]
 struct Cli {
     /// Pick a specific Pico de Gallo by USB serial number.
     #[arg(long, global = true)]
@@ -46,16 +51,26 @@ struct Cli {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum ActiveArg { High, Low }
+enum ActiveArg {
+    High,
+    Low,
+}
 #[derive(Clone, Copy, ValueEnum)]
-enum ReleaseArg { DriveHigh, DriveLow, HiZ }
+enum ReleaseArg {
+    DriveHigh,
+    DriveLow,
+    HiZ,
+}
 
 impl Cli {
     /// Build the bus-hold config from the flags (`None` = bare chip, no hold).
     fn hold(&self) -> Option<HoldConfig> {
         self.hold_gpio.map(|pin| HoldConfig {
             pin,
-            active: match self.hold_active { ActiveArg::High => Level::High, ActiveArg::Low => Level::Low },
+            active: match self.hold_active {
+                ActiveArg::High => Level::High,
+                ActiveArg::Low => Level::Low,
+            },
             release: match self.hold_release {
                 ReleaseArg::DriveHigh => Release::DriveHigh,
                 ReleaseArg::DriveLow => Release::DriveLow,
@@ -137,25 +152,37 @@ fn build_flasher(cli: &Cli) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device:
 }
 
 /// Like `build_flasher`, but at a caller-chosen SPI frequency (doctor steps freq).
-fn build_flasher_at(cli: &Cli, freq: u32) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
+fn build_flasher_at(
+    cli: &Cli,
+    freq: u32,
+) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
     let conn = device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
     // Chunk to the firmware's max transfer for best throughput.
     let max_chunk = pico_de_gallo_lib::MAX_TRANSFER_SIZE.min(flash::PAGE_SIZE);
     let Connected2 { spi, bus } = keep_alive(conn);
     Ok(Flasher::with_config(
-        spi, bus, max_chunk,
-        Duration::from_millis(2), Duration::from_secs(120),
+        spi,
+        bus,
+        max_chunk,
+        Duration::from_millis(2),
+        Duration::from_secs(120),
     ))
 }
 
 // Helper: keep the Hal handle alive for the process lifetime.
-struct Connected2 { spi: pico_de_gallo_hal::SpiDev, bus: device::HostBus }
+struct Connected2 {
+    spi: pico_de_gallo_hal::SpiDev,
+    bus: device::HostBus,
+}
 fn keep_alive(conn: device::Connected) -> Connected2 {
     // `Hal` owns the tokio runtime; SpiDev/Gpio only hold cloned Handles, which
     // do NOT keep it alive. Leak `Hal` so the runtime outlives the handles for
     // the whole process — this leak is required, not optional.
     Box::leak(Box::new(conn._hal));
-    Connected2 { spi: conn.spi, bus: conn.bus }
+    Connected2 {
+        spi: conn.spi,
+        bus: conn.bus,
+    }
 }
 
 fn main() {
@@ -187,8 +214,14 @@ fn run() -> Result<()> {
             let _ = f.release_bus();
             let id = r.map_err(anyhow_from)?;
             out.emit(
-                &format!("{:02X} {:02X} {:02X}", id.manufacturer, id.mem_type, id.capacity_code),
-                Some(&format!("{:02X}{:02X}{:02X}", id.manufacturer, id.mem_type, id.capacity_code)),
+                &format!(
+                    "{:02X} {:02X} {:02X}",
+                    id.manufacturer, id.mem_type, id.capacity_code
+                ),
+                Some(&format!(
+                    "{:02X}{:02X}{:02X}",
+                    id.manufacturer, id.mem_type, id.capacity_code
+                )),
             );
         }
         Cmd::Info => {
@@ -232,10 +265,19 @@ fn run() -> Result<()> {
             let name = catalog::describe(jedec);
             out.emit(
                 &voice::found(&name),
-                Some(&format!("{:02X} {:02X} {:02X}", jedec[0], jedec[1], jedec[2])),
+                Some(&format!(
+                    "{:02X} {:02X} {:02X}",
+                    jedec[0], jedec[1], jedec[2]
+                )),
             );
         }
-        Cmd::Program { bitstream, offset, no_verify, chip_erase, unprotect } => {
+        Cmd::Program {
+            bitstream,
+            offset,
+            no_verify,
+            chip_erase,
+            unprotect,
+        } => {
             let out = Out::new(&cli);
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
@@ -255,7 +297,10 @@ fn run() -> Result<()> {
                     std::process::exit(1);
                 }
                 Ok(_) => {}
-                Err(e) => { let _ = f.release_bus(); return Err(anyhow_from(e)); }
+                Err(e) => {
+                    let _ = f.release_bus();
+                    return Err(anyhow_from(e));
+                }
             }
 
             let res = (|| -> Result<()> {
@@ -263,10 +308,14 @@ fn run() -> Result<()> {
                 if let Some(cap) = f.profile().and_then(|p| p.capacity) {
                     if *offset + image.len() > cap {
                         return Err(anyhow::anyhow!(
-                            "image needs {} bytes but flash is {cap} bytes", *offset + image.len()));
+                            "image needs {} bytes but flash is {cap} bytes",
+                            *offset + image.len()
+                        ));
                     }
                 }
-                if *unprotect { f.unprotect().map_err(anyhow_from)?; }
+                if *unprotect {
+                    f.unprotect().map_err(anyhow_from)?;
+                }
                 out.emit(voice::programming(), None);
                 if *chip_erase {
                     f.chip_erase().map_err(anyhow_from)?;
@@ -283,7 +332,11 @@ fn run() -> Result<()> {
             res?;
             out.emit(voice::programmed(), Some("OK"));
         }
-        Cmd::Read { out: outfile, length, offset } => {
+        Cmd::Read {
+            out: outfile,
+            length,
+            offset,
+        } => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
@@ -317,7 +370,11 @@ fn run() -> Result<()> {
             res?;
             out.emit(voice::verify_ok(), Some("OK"));
         }
-        Cmd::Erase { offset, length, chip } => {
+        Cmd::Erase {
+            offset,
+            length,
+            chip,
+        } => {
             let out = Out::new(&cli);
             // Validate the erase target BEFORE acquiring the bus, so a missing
             // argument can't leave a held master (e.g. the FPGA) stuck in reset.
@@ -342,8 +399,13 @@ fn run() -> Result<()> {
         }
         Cmd::List => {
             for c in sfdp::FALLBACK_TABLE {
-                println!("{:02X} {:02X} {:02X}  {}", c.jedec[0], c.jedec[1], c.jedec[2],
-                    catalog::describe(c.jedec));
+                println!(
+                    "{:02X} {:02X} {:02X}  {}",
+                    c.jedec[0],
+                    c.jedec[1],
+                    c.jedec[2],
+                    catalog::describe(c.jedec)
+                );
             }
             println!("(any chip with valid SFDP is supported automatically.)");
         }
@@ -406,7 +468,8 @@ fn run() -> Result<()> {
             // 3. SFDP readable? (still bus-held)
             let sfdp_res = {
                 let mut hdr = [0u8; 8];
-                f.read_sfdp(0, &mut hdr).map(|_| sfdp::SfdpHeader::parse(&hdr).is_some())
+                f.read_sfdp(0, &mut hdr)
+                    .map(|_| sfdp::SfdpHeader::parse(&hdr).is_some())
             };
             let _ = f.release_bus();
 
@@ -419,8 +482,10 @@ fn run() -> Result<()> {
                     return Ok(());
                 }
             };
-            println!("RDID @ {} Hz: {:02X} {:02X} {:02X}", cli.freq,
-                id.manufacturer, id.mem_type, id.capacity_code);
+            println!(
+                "RDID @ {} Hz: {:02X} {:02X} {:02X}",
+                cli.freq, id.manufacturer, id.mem_type, id.capacity_code
+            );
             // 1b. Not present?
             if !id.is_present() {
                 out.emit(voice::no_flash(), Some("FAIL: no chip"));
@@ -437,26 +502,44 @@ fn run() -> Result<()> {
             }
             // 3. SFDP.
             match sfdp_res {
-                Ok(true)  => println!("SFDP: present"),
+                Ok(true) => println!("SFDP: present"),
                 Ok(false) => println!("SFDP: absent (will use the fallback table)"),
-                Err(e)    => println!("SFDP: read failed ({})", anyhow_from(e)),
+                Err(e) => println!("SFDP: read failed ({})", anyhow_from(e)),
             }
             // 4. Step SPI frequency and confirm RDID is identical each time.
             let mut stable = true;
             for freq in [1_000_000u32, 5_000_000, 10_000_000] {
                 match build_flasher_at(&cli, freq) {
                     Ok(mut ff) => {
-                        if ff.acquire_bus().is_err() { println!("  {freq} Hz: bus acquire failed"); stable = false; continue; }
+                        if ff.acquire_bus().is_err() {
+                            println!("  {freq} Hz: bus acquire failed");
+                            stable = false;
+                            continue;
+                        }
                         let r = ff.read_id();
                         let _ = ff.release_bus();
                         match r {
-                            Ok(fid) if fid.jedec() == id.jedec() => println!("  {freq} Hz: {:02X} {:02X} {:02X} OK",
-                                fid.manufacturer, fid.mem_type, fid.capacity_code),
-                            Ok(fid) => { println!("  {freq} Hz: {:02X} {:02X} {:02X} MISMATCH", fid.manufacturer, fid.mem_type, fid.capacity_code); stable = false; }
-                            Err(e) => { println!("  {freq} Hz: read failed ({})", anyhow_from(e)); stable = false; }
+                            Ok(fid) if fid.jedec() == id.jedec() => println!(
+                                "  {freq} Hz: {:02X} {:02X} {:02X} OK",
+                                fid.manufacturer, fid.mem_type, fid.capacity_code
+                            ),
+                            Ok(fid) => {
+                                println!(
+                                    "  {freq} Hz: {:02X} {:02X} {:02X} MISMATCH",
+                                    fid.manufacturer, fid.mem_type, fid.capacity_code
+                                );
+                                stable = false;
+                            }
+                            Err(e) => {
+                                println!("  {freq} Hz: read failed ({})", anyhow_from(e));
+                                stable = false;
+                            }
                         }
                     }
-                    Err(e) => { println!("  {freq} Hz: connect failed ({e:#})"); stable = false; }
+                    Err(e) => {
+                        println!("  {freq} Hz: connect failed ({e:#})");
+                        stable = false;
+                    }
                 }
             }
             // 5. Summary.
@@ -488,7 +571,8 @@ fn run() -> Result<()> {
                     let _ = f.release_bus();
                     if !res? {
                         return Err(anyhow::anyhow!(
-                            "read-back inconsistent between two reads — signal integrity suspect"));
+                            "read-back inconsistent between two reads — signal integrity suspect"
+                        ));
                     }
                     out.emit(voice::nothing_unusual(), Some("OK"));
                 }
@@ -501,7 +585,10 @@ fn run() -> Result<()> {
                             std::process::exit(1);
                         }
                         Ok(false) => {}
-                        Err(e) => { let _ = f.release_bus(); return Err(anyhow_from(e)); }
+                        Err(e) => {
+                            let _ = f.release_bus();
+                            return Err(anyhow_from(e));
+                        }
                     }
                     let sec = f.profile().map(|p| p.min_erase()).unwrap_or(4096);
                     let cap = f.profile().and_then(|p| p.capacity);
@@ -511,7 +598,9 @@ fn run() -> Result<()> {
                             let _ = f.release_bus();
                             return Err(anyhow::anyhow!(
                                 "sector {n} is out of range (chip holds {} sectors of {} bytes)",
-                                cap / sec, sec));
+                                cap / sec,
+                                sec
+                            ));
                         }
                     }
                     // Back up the sector before destroying it.
@@ -537,7 +626,8 @@ fn run() -> Result<()> {
                     })();
                     let _ = f.release_bus();
                     test_res?;
-                    restore_res.context("sector test passed but restoring the original contents failed")?;
+                    restore_res
+                        .context("sector test passed but restoring the original contents failed")?;
                     out.emit(voice::nothing_unusual(), Some("OK"));
                 }
             }
@@ -550,13 +640,24 @@ fn anyhow_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> a
     anyhow::anyhow!("{e}")
 }
 
-struct Out { quiet: bool }
+struct Out {
+    quiet: bool,
+}
 impl Out {
-    fn new(cli: &Cli) -> Self { Out { quiet: cli.quiet || !std::io::stdout().is_terminal() } }
+    fn new(cli: &Cli) -> Self {
+        Out {
+            quiet: cli.quiet || !std::io::stdout().is_terminal(),
+        }
+    }
     /// Personality line for humans; optional machine line for `--quiet`/non-TTY.
     fn emit(&self, human: &str, machine: Option<&str>) {
-        if self.quiet { if let Some(m) = machine { println!("{m}"); } }
-        else { println!("{human}"); }
+        if self.quiet {
+            if let Some(m) = machine {
+                println!("{m}");
+            }
+        } else {
+            println!("{human}");
+        }
     }
 }
 

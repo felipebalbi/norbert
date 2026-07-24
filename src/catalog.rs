@@ -18,14 +18,35 @@ pub fn manufacturer(id: u8) -> Option<&'static str> {
 }
 
 /// Known part by full 3-byte JEDEC ID (pretty names for `detect`/`list`).
-pub struct NamedChip { pub jedec: [u8; 3], pub name: &'static str }
+pub struct NamedChip {
+    pub jedec: [u8; 3],
+    pub name: &'static str,
+}
 pub static CHIP_NAMES: &[NamedChip] = &[
-    NamedChip { jedec: [0xEF, 0x40, 0x18], name: "Winbond W25Q128JV" },
-    NamedChip { jedec: [0xEF, 0x40, 0x17], name: "Winbond W25Q64" },
-    NamedChip { jedec: [0xEF, 0x40, 0x16], name: "Winbond W25Q32" },
-    NamedChip { jedec: [0x20, 0x20, 0x15], name: "Micron M25P16" },
-    NamedChip { jedec: [0x1C, 0x70, 0x15], name: "EON EN25QH16B" },
-    NamedChip { jedec: [0xC2, 0x20, 0x18], name: "Macronix MX25L128" },
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x18],
+        name: "Winbond W25Q128JV",
+    },
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x17],
+        name: "Winbond W25Q64",
+    },
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x16],
+        name: "Winbond W25Q32",
+    },
+    NamedChip {
+        jedec: [0x20, 0x20, 0x15],
+        name: "Micron M25P16",
+    },
+    NamedChip {
+        jedec: [0x1C, 0x70, 0x15],
+        name: "EON EN25QH16B",
+    },
+    NamedChip {
+        jedec: [0xC2, 0x20, 0x18],
+        name: "Macronix MX25L128",
+    },
     // add more as you meet them…
 ];
 
@@ -35,8 +56,14 @@ pub fn describe(jedec: [u8; 3]) -> String {
         return c.name.to_string();
     }
     match manufacturer(jedec[0]) {
-        Some(m) => format!("{m} SPI NOR ({:02X} {:02X} {:02X})", jedec[0], jedec[1], jedec[2]),
-        None => format!("unknown flash ({:02X} {:02X} {:02X})", jedec[0], jedec[1], jedec[2]),
+        Some(m) => format!(
+            "{m} SPI NOR ({:02X} {:02X} {:02X})",
+            jedec[0], jedec[1], jedec[2]
+        ),
+        None => format!(
+            "unknown flash ({:02X} {:02X} {:02X})",
+            jedec[0], jedec[1], jedec[2]
+        ),
     }
 }
 

@@ -27,7 +27,11 @@ pub struct FlashProfile {
 
 impl FlashProfile {
     pub fn min_erase(&self) -> usize {
-        self.erase_types.iter().map(|e| e.size).min().unwrap_or(64 * 1024)
+        self.erase_types
+            .iter()
+            .map(|e| e.size)
+            .min()
+            .unwrap_or(64 * 1024)
     }
 }
 
@@ -74,22 +78,31 @@ pub struct KnownChip {
 /// Add a row (datasheet values) to support a new no-SFDP chip.
 pub static FALLBACK_TABLE: &[KnownChip] = &[
     KnownChip {
-        jedec: [0x20, 0x20, 0x15], name: "Micron/Numonyx M25P16",
-        page_size: 256, address_bytes: 3, capacity: 2 * 1024 * 1024,
-        erase_types: &[EraseType { size: 64 * 1024, opcode: 0xD8 }],
+        jedec: [0x20, 0x20, 0x15],
+        name: "Micron/Numonyx M25P16",
+        page_size: 256,
+        address_bytes: 3,
+        capacity: 2 * 1024 * 1024,
+        erase_types: &[EraseType {
+            size: 64 * 1024,
+            opcode: 0xD8,
+        }],
     },
     // add more no-SFDP parts here…
 ];
 
 /// Build a `FlashProfile` for a chip in the fallback table, else `None`.
 pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
-    FALLBACK_TABLE.iter().find(|c| c.jedec == jedec).map(|c| FlashProfile {
-        page_size: c.page_size,
-        address_bytes: c.address_bytes,
-        capacity: Some(c.capacity),
-        erase_types: c.erase_types.to_vec(),
-        source: ProfileSource::Table,
-    })
+    FALLBACK_TABLE
+        .iter()
+        .find(|c| c.jedec == jedec)
+        .map(|c| FlashProfile {
+            page_size: c.page_size,
+            address_bytes: c.address_bytes,
+            capacity: Some(c.capacity),
+            erase_types: c.erase_types.to_vec(),
+            source: ProfileSource::Table,
+        })
 }
 
 pub const SFDP_SIGNATURE: [u8; 4] = *b"SFDP";
@@ -107,21 +120,35 @@ pub struct SfdpHeader {
 
 impl SfdpHeader {
     pub fn parse(b: &[u8]) -> Option<SfdpHeader> {
-        if b.len() < 8 || b[0..4] != SFDP_SIGNATURE { return None; }
-        Some(SfdpHeader { minor: b[4], major: b[5], nph: b[6] })
+        if b.len() < 8 || b[0..4] != SFDP_SIGNATURE {
+            return None;
+        }
+        Some(SfdpHeader {
+            minor: b[4],
+            major: b[5],
+            nph: b[6],
+        })
     }
     /// Parameter-header count (`nph` is the count minus one).
-    pub fn param_header_count(&self) -> usize { self.nph as usize + 1 }
+    pub fn param_header_count(&self) -> usize {
+        self.nph as usize + 1
+    }
 }
 
 /// 8-byte parameter header.
 #[derive(Debug, Clone, Copy)]
-pub struct ParamHeader { pub id: u16, pub length_dwords: u8, pub table_pointer: u32 }
+pub struct ParamHeader {
+    pub id: u16,
+    pub length_dwords: u8,
+    pub table_pointer: u32,
+}
 
 impl ParamHeader {
     pub const BFPT_ID: u16 = 0xFF00;
     pub fn parse(b: &[u8]) -> Option<ParamHeader> {
-        if b.len() < 8 { return None; }
+        if b.len() < 8 {
+            return None;
+        }
         Some(ParamHeader {
             id: ((b[7] as u16) << 8) | b[0] as u16,
             length_dwords: b[3],
@@ -141,7 +168,8 @@ pub struct Bfpt {
 
 fn dword(b: &[u8], idx1: usize) -> Option<u32> {
     let off = (idx1 - 1) * 4;
-    b.get(off..off + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    b.get(off..off + 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
 impl Bfpt {
@@ -174,7 +202,10 @@ impl Bfpt {
                     (((d >> 16) & 0xFF) as u8, ((d >> 24) & 0xFF) as u8)
                 };
                 if size_field != 0 && (size_field as u32) < usize::BITS {
-                    erase_types.push(EraseType { size: 1usize << size_field, opcode });
+                    erase_types.push(EraseType {
+                        size: 1usize << size_field,
+                        opcode,
+                    });
                 }
             }
         }
@@ -185,7 +216,12 @@ impl Bfpt {
             .filter(|&p| p >= 1)
             .unwrap_or(256);
 
-        Bfpt { address_bytes, page_size, capacity, erase_types }
+        Bfpt {
+            address_bytes,
+            page_size,
+            capacity,
+            erase_types,
+        }
     }
 }
 
@@ -195,8 +231,16 @@ mod tests {
 
     fn profile_with(sizes: &[(usize, u8)]) -> FlashProfile {
         FlashProfile {
-            page_size: 256, address_bytes: 3, capacity: Some(2 * 1024 * 1024),
-            erase_types: sizes.iter().map(|(s, o)| EraseType { size: *s, opcode: *o }).collect(),
+            page_size: 256,
+            address_bytes: 3,
+            capacity: Some(2 * 1024 * 1024),
+            erase_types: sizes
+                .iter()
+                .map(|(s, o)| EraseType {
+                    size: *s,
+                    opcode: *o,
+                })
+                .collect(),
             source: ProfileSource::Sfdp,
         }
     }
@@ -204,14 +248,19 @@ mod tests {
     #[test]
     fn single_granularity_plan_is_64k_blocks() {
         let p = profile_with(&[(64 * 1024, 0xD8)]);
-        assert_eq!(plan_erase(&p, 0, 135_100), vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0xD8)]);
+        assert_eq!(
+            plan_erase(&p, 0, 135_100),
+            vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0xD8)]
+        );
     }
 
     #[test]
     fn mixed_granularity_uses_small_sector_at_tail() {
         let p = profile_with(&[(4 * 1024, 0x20), (32 * 1024, 0x52), (64 * 1024, 0xD8)]);
-        assert_eq!(plan_erase(&p, 0, 131_072 + 100),
-            vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0x20)]);
+        assert_eq!(
+            plan_erase(&p, 0, 131_072 + 100),
+            vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0x20)]
+        );
     }
 
     #[test]
@@ -225,7 +274,13 @@ mod tests {
         assert_eq!(p.source, ProfileSource::Table);
         assert_eq!(p.address_bytes, 3);
         assert_eq!(p.capacity, Some(2 * 1024 * 1024));
-        assert_eq!(p.erase_types, vec![EraseType { size: 64 * 1024, opcode: 0xD8 }]);
+        assert_eq!(
+            p.erase_types,
+            vec![EraseType {
+                size: 64 * 1024,
+                opcode: 0xD8
+            }]
+        );
         assert!(lookup_fallback([0xAB, 0xCD, 0xEF]).is_none()); // unknown → not supported
     }
 
@@ -233,8 +288,8 @@ mod tests {
     // erase 4K/0x20, 32K/0x52, 64K/0xD8.
     fn sample_bfpt() -> Vec<u8> {
         let mut b = vec![0u8; 11 * 4];
-        b[0..4].copy_from_slice(&[0xE5, 0x20, 0x00, 0x00]);   // dword1: 4K op=0x20, addr=3B
-        b[4..8].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0x00]);   // dword2: 16 Mbit density
+        b[0..4].copy_from_slice(&[0xE5, 0x20, 0x00, 0x00]); // dword1: 4K op=0x20, addr=3B
+        b[4..8].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0x00]); // dword2: 16 Mbit density
         b[28..32].copy_from_slice(&[0x0C, 0x20, 0x0F, 0x52]); // dword8: 4K/0x20, 32K/0x52
         b[32..36].copy_from_slice(&[0x10, 0xD8, 0x00, 0x00]); // dword9: 64K/0xD8, none
         b[40..44].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]); // dword11: page 2^8=256
@@ -247,11 +302,23 @@ mod tests {
         assert_eq!(bfpt.address_bytes, 3);
         assert_eq!(bfpt.page_size, 256);
         assert_eq!(bfpt.capacity, Some(2 * 1024 * 1024));
-        assert_eq!(bfpt.erase_types, vec![
-            EraseType { size: 64 * 1024, opcode: 0xD8 },
-            EraseType { size: 32 * 1024, opcode: 0x52 },
-            EraseType { size: 4 * 1024, opcode: 0x20 },
-        ]);
+        assert_eq!(
+            bfpt.erase_types,
+            vec![
+                EraseType {
+                    size: 64 * 1024,
+                    opcode: 0xD8
+                },
+                EraseType {
+                    size: 32 * 1024,
+                    opcode: 0x52
+                },
+                EraseType {
+                    size: 4 * 1024,
+                    opcode: 0x20
+                },
+            ]
+        );
     }
 
     #[test]
