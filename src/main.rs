@@ -7,14 +7,18 @@ mod catalog;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use device::{HoldConfig, Level, Release};
 use flash::{FlashError, Flasher, Progress};
 
+const NORBERT_VERSION: &str =
+    concat!("Norbert ", env!("CARGO_PKG_VERSION"), "\nReliable since Tuesday.");
+
 #[derive(Parser)]
-#[command(name = "norbert", about = "Read/erase/program/verify any SPI-NOR flash via Pico de Gallo")]
+#[command(name = "norbert", version = NORBERT_VERSION, about = "A patient SPI-NOR flasher")]
 struct Cli {
     /// Pick a specific Pico de Gallo by USB serial number.
     #[arg(long, global = true)]
@@ -35,6 +39,9 @@ struct Cli {
     /// What to do with the bus GPIO on release.
     #[arg(long, global = true, value_enum, default_value_t = ReleaseArg::HiZ)]
     hold_release: ReleaseArg,
+    /// Machine-friendly output: drop the commentary, print IDs/addresses/OK/FAIL only.
+    #[arg(long, global = true)]
+    quiet: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -61,15 +68,10 @@ impl Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Read and print the flash JEDEC ID (bring-up check).
-    Id,
-    /// Read + print JEDEC ID and SFDP/profile info.
-    Info,
-    /// Detect and print the flash profile the tool will use (SFDP or fallback table).
-    #[command(alias = "discover")]
-    Detect,
+    /// Read the raw 3-byte JEDEC ID.
+    Jedec,
     /// Erase + program + verify a bitstream at an offset, then boot it.
-    Write {
+    Program {
         bitstream: PathBuf,
         #[arg(long, default_value_t = 0)]
         offset: usize,
@@ -106,6 +108,21 @@ enum Cmd {
         #[arg(long)]
         chip: bool,
     },
+    /// Detect and print the flash profile the tool will use (SFDP or fallback table).
+    #[command(alias = "discover")]
+    Detect,
+    /// Read + print JEDEC ID and SFDP/profile info.
+    Info,
+    /// Dump raw SFDP and the decoded BFPT.
+    Sfdp,
+    /// List the chips Norbert knows without SFDP (the fallback table).
+    List,
+    /// Set status-register block-protection bits.
+    Protect,
+    /// Clear status-register block-protection bits.
+    Unprotect,
+    /// Flash soft-reset (0x66/0x99); also reboots a held master.
+    Reset,
 }
 
 fn build_flasher(cli: &Cli) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
@@ -133,10 +150,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.cmd {
-        Cmd::Id => {
+        Cmd::Jedec => {
+            let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
             let id = f.read_id().map_err(anyhow_from)?;
-            println!("{id}");
+            let _ = f.release_bus();
+            out.emit(
+                &format!("{:02X} {:02X} {:02X}", id.manufacturer, id.mem_type, id.capacity_code),
+                Some(&format!("{:02X}{:02X}{:02X}", id.manufacturer, id.mem_type, id.capacity_code)),
+            );
         }
         Cmd::Info => {
             let mut f = build_flasher(&cli)?;
@@ -166,7 +189,7 @@ fn main() -> Result<()> {
             let _ = f.release_bus();
             print_profile(&res?);
         }
-        Cmd::Write { bitstream, offset, no_verify, chip_erase, unprotect } => {
+        Cmd::Program { bitstream, offset, no_verify, chip_erase, unprotect } => {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
@@ -239,6 +262,63 @@ fn main() -> Result<()> {
             r?;
             println!("erase ✓");
         }
+        Cmd::List => {
+            for c in sfdp::FALLBACK_TABLE {
+                println!("{:02X} {:02X} {:02X}  {}", c.jedec[0], c.jedec[1], c.jedec[2],
+                    catalog::describe(c.jedec));
+            }
+            println!("(any chip with valid SFDP is supported automatically.)");
+        }
+        Cmd::Sfdp => {
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let out = (|| -> Result<()> {
+                let mut header = [0u8; 8];
+                f.read_sfdp(0, &mut header).map_err(anyhow_from)?;
+                if sfdp::SfdpHeader::parse(&header).is_none() {
+                    println!("no SFDP (signature absent)");
+                    return Ok(());
+                }
+                // Dump the first 256 bytes of SFDP space as hex.
+                let mut blob = vec![0u8; 256];
+                f.read_sfdp(0, &mut blob).map_err(anyhow_from)?;
+                println!("SFDP (first 256 bytes):");
+                for (i, chunk) in blob.chunks(16).enumerate() {
+                    let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02X}")).collect();
+                    println!("  {:04X}: {}", i * 16, hex.join(" "));
+                }
+                Ok(())
+            })();
+            let _ = f.release_bus();
+            out?;
+        }
+        Cmd::Protect => {
+            let out = Out::new(&cli);
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let r = f.protect();
+            let _ = f.release_bus();
+            r.map_err(anyhow_from)?;
+            out.emit(voice::protect_done(), Some("OK"));
+        }
+        Cmd::Unprotect => {
+            let out = Out::new(&cli);
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let r = f.unprotect();
+            let _ = f.release_bus();
+            r.map_err(anyhow_from)?;
+            out.emit(voice::unprotect_done(), Some("OK"));
+        }
+        Cmd::Reset => {
+            let out = Out::new(&cli);
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let r = f.reset_flash();
+            let _ = f.release_bus(); // also reboots a held master
+            r.map_err(anyhow_from)?;
+            out.emit(voice::reset_done(), Some("OK"));
+        }
     }
     Ok(())
 }
@@ -252,6 +332,33 @@ fn spinner() -> ProgressBar {
 
 fn anyhow_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> anyhow::Error {
     anyhow::anyhow!("{e}")
+}
+
+struct Out { quiet: bool }
+impl Out {
+    fn new(cli: &Cli) -> Self { Out { quiet: cli.quiet || !std::io::stdout().is_terminal() } }
+    /// Personality line for humans; optional machine line for `--quiet`/non-TTY.
+    fn emit(&self, human: &str, machine: Option<&str>) {
+        if self.quiet { if let Some(m) = machine { println!("{m}"); } }
+        else { println!("{human}"); }
+    }
+}
+
+/// Render a FlashError as Norbert's voice where personality applies, else technical.
+#[allow(dead_code)] // used directly in Task 23b
+fn norbert_error<S: std::fmt::Debug, R: std::fmt::Debug>(e: &FlashError<S, R>) -> String {
+    match e {
+        FlashError::NoFlash => voice::no_flash().to_string(),
+        FlashError::UnsupportedChip { jedec } => voice::unsupported(*jedec),
+        FlashError::VerifyMismatch { addr, .. } => voice::verify_fail(*addr),
+        other => other.to_string(),
+    }
+}
+
+/// Convert a FlashError into an anyhow error carrying Norbert's line (for user-facing failures).
+#[allow(dead_code)] // used directly in Task 23b
+fn norbert_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> anyhow::Error {
+    anyhow::anyhow!("{}", norbert_error(&e))
 }
 
 fn print_profile(p: &sfdp::FlashProfile) {
