@@ -3,7 +3,6 @@
 //! Rules (see the plan's "Norbert's voice"): no exclamation points; dry,
 //! understated, mildly paternal; every failure carries the technical fact.
 //! Pure string builders — no I/O, no logic, and absolutely no jokes elsewhere.
-#![allow(dead_code)] // personality palette; wired into the CLI in Tasks 23-24, every fn is exercised by tests
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -24,6 +23,7 @@ pub fn unsupported(jedec: [u8; 3]) -> String {
     format!("I don't recognize this one.\n\nJEDEC {jedec:02X?} — no SFDP, and it's not in my book yet.")
 }
 pub fn reset_done() -> &'static str { "There. As if nothing happened." }
+#[allow(dead_code)] // wired in Task 24 (doctor/test)
 pub fn nothing_unusual() -> &'static str { "Nothing unusual." }
 pub fn version() -> String { format!("Norbert {VERSION}\nReliable since Tuesday.") }
 

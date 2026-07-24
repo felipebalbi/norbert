@@ -1,5 +1,4 @@
 //! Human names for flash chips — "Norbert's book". Pure tables; extend freely.
-#![allow(dead_code)] // name book; wired into detect/list/info in Task 23
 
 /// JEDEC manufacturer ID → name (JEP106, common subset).
 pub fn manufacturer(id: u8) -> Option<&'static str> {

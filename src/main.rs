@@ -6,19 +6,15 @@ mod catalog;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use device::{HoldConfig, Level, Release};
-use flash::{FlashError, Flasher, Progress};
-
-const NORBERT_VERSION: &str =
-    concat!("Norbert ", env!("CARGO_PKG_VERSION"), "\nReliable since Tuesday.");
+use flash::{FlashError, Flasher};
 
 #[derive(Parser)]
-#[command(name = "norbert", version = NORBERT_VERSION, about = "A patient SPI-NOR flasher")]
+#[command(name = "norbert", about = "A patient SPI-NOR flasher", disable_version_flag = true, arg_required_else_help = true)]
 struct Cli {
     /// Pick a specific Pico de Gallo by USB serial number.
     #[arg(long, global = true)]
@@ -42,8 +38,11 @@ struct Cli {
     /// Machine-friendly output: drop the commentary, print IDs/addresses/OK/FAIL only.
     #[arg(long, global = true)]
     quiet: bool,
+    /// Print version.
+    #[arg(short = 'V', long = "version", global = true)]
+    version: bool,
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -149,7 +148,17 @@ fn keep_alive(conn: device::Connected) -> Connected2 {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match &cli.cmd {
+    if cli.version {
+        println!("{}", voice::version());
+        return Ok(());
+    }
+    let Some(cmd) = cli.cmd.as_ref() else {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    };
+    match cmd {
         Cmd::Jedec => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
@@ -171,8 +180,13 @@ fn main() -> Result<()> {
                     return Ok(());
                 }
                 println!("JEDEC id: {id}");
+                println!("chip:     {}", catalog::describe(id.jedec()));
                 match f.detect_profile() {
-                    Ok(p) => print_profile(&p),
+                    Ok(p) => {
+                        print_profile(&p);
+                        println!("SFDP:     {}",
+                            if p.source == sfdp::ProfileSource::Sfdp { "present" } else { "—" });
+                    }
                     Err(FlashError::UnsupportedChip { jedec }) => println!(
                         "unsupported: JEDEC {jedec:02X?} — no SFDP and no fallback-table entry (add one to FALLBACK_TABLE)"),
                     Err(e) => return Err(anyhow_from(e)),
@@ -183,68 +197,107 @@ fn main() -> Result<()> {
             out?;
         }
         Cmd::Detect => {
+            let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let res = f.detect_profile().map_err(anyhow_from);
+            out.emit(voice::detect_opener(), None);
+            let res = (|| -> Result<[u8; 3]> {
+                let id = f.read_id().map_err(norbert_from)?;
+                f.detect_profile().map_err(norbert_from)?;
+                Ok(id.jedec())
+            })();
             let _ = f.release_bus();
-            print_profile(&res?);
+            let jedec = res?;
+            let name = catalog::describe(jedec);
+            out.emit(
+                &voice::found(&name),
+                Some(&format!("{:02X} {:02X} {:02X}", jedec[0], jedec[1], jedec[2])),
+            );
         }
         Cmd::Program { bitstream, offset, no_verify, chip_erase, unprotect } => {
+            let out = Out::new(&cli);
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
-            let id = f.read_id().map_err(anyhow_from)?;
-            println!("flash: {id}");
-            let size = id.capacity_bytes();
-            let pb = spinner();
-            if *chip_erase {
-                f.acquire_bus().map_err(anyhow_from)?;
-                let r = f.detect_profile().map_err(anyhow_from);
-                if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
-                if *unprotect { let r = f.unprotect().map_err(anyhow_from); if let Err(e) = r { let _ = f.release_bus(); return Err(e); } }
-                pb.set_message("chip erase…");
-                let r = f.chip_erase().map_err(anyhow_from);
-                if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
-                let r = f.program(*offset, &image, |_| {}).map_err(anyhow_from);
-                if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
-                if !*no_verify { f.verify(*offset, &image, |_| {}).map_err(anyhow_from)
-                    .inspect_err(|_| { let _ = f.release_bus(); })?; }
-                f.release_bus().map_err(anyhow_from)?;
-            } else {
-                let res = f.flash_bitstream(*offset, &image, true, *unprotect, !*no_verify, size, |p| {
-                    pb.set_message(match p {
-                        Progress::Detecting => "detecting flash (SFDP)…".to_string(),
-                        Progress::Erasing => "erasing…".to_string(),
-                        Progress::Programming(n) => format!("programming {n}/{}", image.len()),
-                        Progress::Verifying(n) => format!("verifying {n}/{}", image.len()),
-                        Progress::Done => "done".to_string(),
-                    });
-                });
-                if res.is_err() { let _ = f.release_bus(); } // never leave FPGA in reset
-                res.map_err(anyhow_from)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+
+            // Detect first (bus held), release on error.
+            if let Err(e) = f.detect_profile() {
+                let _ = f.release_bus();
+                return Err(norbert_from(e));
             }
-            pb.finish_with_message("flashed ✓");
+            // Protection pre-check: speak, don't silently no-op.
+            match f.is_protected() {
+                Ok(true) if !*unprotect => {
+                    let _ = f.release_bus();
+                    out.emit(voice::protected(), Some("FAIL: protected"));
+                    std::process::exit(1);
+                }
+                Ok(_) => {}
+                Err(e) => { let _ = f.release_bus(); return Err(anyhow_from(e)); }
+            }
+
+            let res = (|| -> Result<()> {
+                // Oversize guard from the detected capacity.
+                if let Some(cap) = f.profile().and_then(|p| p.capacity) {
+                    if *offset + image.len() > cap {
+                        return Err(anyhow::anyhow!(
+                            "image needs {} bytes but flash is {cap} bytes", *offset + image.len()));
+                    }
+                }
+                if *unprotect { f.unprotect().map_err(anyhow_from)?; }
+                out.emit(voice::programming(), None);
+                if *chip_erase {
+                    f.chip_erase().map_err(anyhow_from)?;
+                } else {
+                    f.erase_range(*offset, image.len()).map_err(anyhow_from)?;
+                }
+                f.program(*offset, &image, |_| {}).map_err(anyhow_from)?;
+                if !*no_verify {
+                    f.verify(*offset, &image, |_| {}).map_err(norbert_from)?;
+                }
+                Ok(())
+            })();
+            let _ = f.release_bus();
+            res?;
+            out.emit(voice::programmed(), Some("OK"));
         }
-        Cmd::Read { out, length, offset } => {
+        Cmd::Read { out: outfile, length, offset } => {
+            let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
             let mut buf = vec![0u8; *length];
-            let r = f.read(*offset, &mut buf).map_err(anyhow_from);
+            let res = (|| -> Result<()> {
+                f.detect_profile().map_err(norbert_from)?;
+                f.read(*offset, &mut buf).map_err(anyhow_from)?;
+                Ok(())
+            })();
             let _ = f.release_bus();
-            r?;
-            std::fs::write(out, &buf).with_context(|| format!("writing {}", out.display()))?;
-            println!("read {length} bytes → {}", out.display());
+            res?;
+            std::fs::write(outfile, &buf)
+                .with_context(|| format!("writing {}", outfile.display()))?;
+            out.emit(
+                &format!("Done. {} bytes to {}", length, outfile.display()),
+                Some(&format!("{length}")),
+            );
         }
         Cmd::Verify { bitstream, offset } => {
-            let image = std::fs::read(bitstream)?;
+            let out = Out::new(&cli);
+            let image = std::fs::read(bitstream)
+                .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let r = f.verify(*offset, &image, |_| {}).map_err(anyhow_from);
+            let res = (|| -> Result<()> {
+                f.detect_profile().map_err(norbert_from)?;
+                f.verify(*offset, &image, |_| {}).map_err(norbert_from)?;
+                Ok(())
+            })();
             let _ = f.release_bus();
-            r?;
-            println!("verify ✓ ({} bytes)", image.len());
+            res?;
+            out.emit(voice::verify_ok(), Some("OK"));
         }
         Cmd::Erase { offset, length, chip } => {
+            let out = Out::new(&cli);
             // Validate the erase target BEFORE acquiring the bus, so a missing
             // argument can't leave a held master (e.g. the FPGA) stuck in reset.
             let len = if *chip {
@@ -254,13 +307,17 @@ fn main() -> Result<()> {
             };
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let r = match len {
-                None => f.chip_erase().map_err(anyhow_from),
-                Some(len) => f.erase_range(*offset, len).map_err(anyhow_from),
-            };
+            let res = (|| -> Result<()> {
+                f.detect_profile().map_err(norbert_from)?;
+                match len {
+                    None => f.chip_erase().map_err(anyhow_from)?,
+                    Some(len) => f.erase_range(*offset, len).map_err(anyhow_from)?,
+                }
+                Ok(())
+            })();
             let _ = f.release_bus();
-            r?;
-            println!("erase ✓");
+            res?;
+            out.emit(voice::erased(), Some("OK"));
         }
         Cmd::List => {
             for c in sfdp::FALLBACK_TABLE {
@@ -323,13 +380,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn spinner() -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
-    pb
-}
-
 fn anyhow_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> anyhow::Error {
     anyhow::anyhow!("{e}")
 }
@@ -345,7 +395,6 @@ impl Out {
 }
 
 /// Render a FlashError as Norbert's voice where personality applies, else technical.
-#[allow(dead_code)] // used directly in Task 23b
 fn norbert_error<S: std::fmt::Debug, R: std::fmt::Debug>(e: &FlashError<S, R>) -> String {
     match e {
         FlashError::NoFlash => voice::no_flash().to_string(),
@@ -356,7 +405,6 @@ fn norbert_error<S: std::fmt::Debug, R: std::fmt::Debug>(e: &FlashError<S, R>) -
 }
 
 /// Convert a FlashError into an anyhow error carrying Norbert's line (for user-facing failures).
-#[allow(dead_code)] // used directly in Task 23b
 fn norbert_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> anyhow::Error {
     anyhow::anyhow!("{}", norbert_error(&e))
 }

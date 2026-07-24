@@ -96,6 +96,7 @@ impl BusAccess for NoHold {
 
 /// Progress callback events for the high-level flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // full-flow helper; retained + tested, CLI drives the steps directly since Task 23b
 pub enum Progress {
     Detecting,          // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
     Erasing,
@@ -111,6 +112,7 @@ pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
     Bus(R),
     Timeout,
     VerifyMismatch { addr: usize, expected: u8, got: u8 },
+    #[allow(dead_code)] // constructed by flash_bitstream (tested); CLI uses erase_range's own guard
     TooLarge { need: usize, have: usize },
     /// RDID read nothing — no chip on the bus.
     NoFlash,
@@ -442,6 +444,7 @@ where
 
     /// Full flow: acquire bus → (detect) → erase covered region → program → (verify) → release.
     /// On any error the caller should still call `release_bus` (see main.rs).
+    #[allow(dead_code)] // retained + tested; CLI drives detect/erase/program/verify directly since Task 23b
     pub fn flash_bitstream(
         &mut self,
         offset: usize,
