@@ -2,6 +2,7 @@ mod flash;
 mod sfdp;
 mod device;
 mod voice;
+mod catalog;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
