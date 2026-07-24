@@ -16,7 +16,10 @@ const CMD_PP:   u8 = 0x02;
 const CMD_CE:   u8 = 0xC7; // chip erase
 const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
 const CMD_EN4B: u8 = 0xB7; // enter 4-byte addressing mode
+const CMD_RSTEN: u8 = 0x66; // enable reset
+const CMD_RST:   u8 = 0x99; // software reset
 const SR_WIP:   u8 = 0x01;
+const SR_BP_MASK: u8 = 0x1C; // BP0..BP2 (typical)
 
 /// Append `opcode` + a 3- or 4-byte big-endian address.
 fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, addr_bytes: u8) {
@@ -313,6 +316,27 @@ where
         self.write_enable()?;
         self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, 0x00])]).map_err(Self::spi_err)?;
         self.wait_ready()
+    }
+
+    /// True if any block-protect bit is set.
+    #[allow(dead_code)] // wired in Task 23/24
+    pub fn is_protected(&mut self) -> Result<bool, FlashError<SPI::Error, RST::Error>> {
+        Ok(self.read_status()? & SR_BP_MASK != 0)
+    }
+
+    /// Set block-protection (WREN + WRSR with BP bits set).
+    #[allow(dead_code)] // wired in Task 23
+    pub fn protect(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.write_enable()?;
+        self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, SR_BP_MASK])]).map_err(Self::spi_err)?;
+        self.wait_ready()
+    }
+
+    /// Flash software reset: 0x66 (enable) then 0x99 (reset).
+    #[allow(dead_code)] // wired in Task 23
+    pub fn reset_flash(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.spi.transaction(&mut [Operation::Write(&[CMD_RSTEN])]).map_err(Self::spi_err)?;
+        self.spi.transaction(&mut [Operation::Write(&[CMD_RST])]).map_err(Self::spi_err)
     }
 
     /// Erase every block overlapping `[offset, offset+len)`, choosing erase
@@ -746,6 +770,24 @@ mod tests {
         assert_eq!(&probe.mem()[0..4], &[1, 2, 3, 4]);             // now written
     }
 
+    #[test]
+    fn protect_then_unprotect_roundtrip() {
+        let flash = FakeFlash::new(1024, [0xEF, 0x40, 0x15]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        assert!(!f.is_protected().unwrap());
+        f.protect().unwrap();
+        assert!(f.is_protected().unwrap());
+        f.unprotect().unwrap();
+        assert!(!f.is_protected().unwrap());
+    }
+
+    #[test]
+    fn soft_reset_runs() {
+        let flash = FakeFlash::new(1024, [0xEF, 0x40, 0x15]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.reset_flash().unwrap(); // 0x66 then 0x99
+    }
+
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
@@ -815,7 +857,8 @@ mod tests {
                 CMD_RDSR => {
                     let wip = if st.busy_reads > 0 { st.busy_reads -= 1; SR_WIP } else { 0 };
                     let wel = if st.wel { 0x02 } else { 0 };
-                    resp.push(wip | wel);
+                    let bp  = if st.protected { 0x1C } else { 0 };
+                    resp.push(wip | wel | bp);
                 }
                 CMD_READ => {
                     let a = addr_at(&mosi);
