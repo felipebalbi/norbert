@@ -13,6 +13,8 @@ const CMD_RDSR: u8 = 0x05;
 const CMD_READ: u8 = 0x03;
 const CMD_PP:   u8 = 0x02;
 const CMD_CE:   u8 = 0xC7; // chip erase
+#[allow(dead_code)] // wired in Task 15 (detect: read_sfdp issues 0x5A)
+const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
 const SR_WIP:   u8 = 0x01;
 
 /// 256-byte program page.
@@ -172,6 +174,19 @@ where
             .transaction(&mut [Operation::Write(&[CMD_RDID]), Operation::Read(&mut id)])
             .map_err(Self::spi_err)?;
         Ok(FlashId { manufacturer: id[0], mem_type: id[1], capacity_code: id[2] })
+    }
+
+    /// Read `buf.len()` bytes from SFDP space at `addr`
+    /// (0x5A + 24-bit addr + 8 dummy cycles).
+    #[allow(dead_code)] // wired in Task 15 (detect_profile reads SFDP to build a FlashProfile)
+    pub fn read_sfdp(&mut self, addr: u32, buf: &mut [u8])
+        -> Result<(), FlashError<SPI::Error, RST::Error>>
+    {
+        let a = addr.to_be_bytes();
+        let header = [CMD_SFDP, a[1], a[2], a[3], 0x00]; // trailing byte = 8 dummy cycles
+        self.spi
+            .transaction(&mut [Operation::Write(&header), Operation::Read(buf)])
+            .map_err(Self::spi_err)
     }
 
     fn write_enable(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
@@ -519,6 +534,16 @@ mod tests {
         assert!(matches!(f.erase_range(0, 10), Err(FlashError::NotDetected)));
     }
 
+    #[test]
+    fn read_sfdp_returns_blob() {
+        let flash = FakeFlash::new(1024, [0xEF, 0x40, 0x15]);
+        flash.set_sfdp(&[0x53, 0x46, 0x44, 0x50, 0x06, 0x01, 0x00, 0xFF]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let mut hdr = [0u8; 8];
+        f.read_sfdp(0, &mut hdr).unwrap();
+        assert_eq!(&hdr[0..4], b"SFDP");
+    }
+
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
@@ -530,6 +555,7 @@ mod tests {
         id: [u8; 3],
         wel: bool,
         busy_reads: u32, // # of RDSR calls that report WIP=1 before clearing
+        sfdp: Vec<u8>,
     }
 
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
@@ -540,10 +566,11 @@ mod tests {
     impl FakeFlash {
         fn new(size: usize, id: [u8; 3]) -> Self {
             FakeFlash(Rc::new(RefCell::new(FakeState {
-                mem: vec![0xFF; size], id, wel: false, busy_reads: 0,
+                mem: vec![0xFF; size], id, wel: false, busy_reads: 0, sfdp: Vec::new(),
             })))
         }
         fn set_busy_reads(&self, n: u32) { self.0.borrow_mut().busy_reads = n; }
+        fn set_sfdp(&self, blob: &[u8]) { self.0.borrow_mut().sfdp = blob.to_vec(); }
         fn mem(&self) -> Vec<u8> { self.0.borrow().mem.clone() }
         fn preset(&self, addr: usize, bytes: &[u8]) {
             self.0.borrow_mut().mem[addr..addr + bytes.len()].copy_from_slice(bytes);
@@ -585,6 +612,11 @@ mod tests {
                     let a = addr24(&mosi);
                     let total: usize = reads.iter().map(|r| r.len()).sum();
                     for i in 0..total { resp.push(*st.mem.get(a + i).unwrap_or(&0xFF)); }
+                }
+                CMD_SFDP => {
+                    let a = u32::from_be_bytes([0, mosi[1], mosi[2], mosi[3]]) as usize;
+                    let total: usize = reads.iter().map(|r| r.len()).sum();
+                    for i in 0..total { resp.push(*st.sfdp.get(a + i).unwrap_or(&0xFF)); }
                 }
                 CMD_PP => {
                     let a = addr24(&mosi);
