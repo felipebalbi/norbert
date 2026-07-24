@@ -9,7 +9,6 @@ pub struct EraseType {
 }
 
 /// How a `FlashProfile` was resolved.
-#[allow(dead_code)] // wired in Task 15 (detect tags each resolved profile's origin)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileSource {
     Sfdp,
@@ -61,9 +60,9 @@ pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usi
 }
 
 /// A known SPI-NOR part that lacks SFDP, described from its datasheet.
-#[allow(dead_code)] // wired in Task 15 (detect: JEDEC fallback-table lookup); `name` for detect logging
 pub struct KnownChip {
     pub jedec: [u8; 3],
+    #[allow(dead_code)] // reserved for detect logging; not read yet
     pub name: &'static str,
     pub page_size: usize,
     pub address_bytes: u8,
@@ -73,7 +72,6 @@ pub struct KnownChip {
 
 /// Fallback table — parts we support that don't self-describe via SFDP.
 /// Add a row (datasheet values) to support a new no-SFDP chip.
-#[allow(dead_code)] // wired in Task 15 (detect: JEDEC fallback-table lookup)
 pub static FALLBACK_TABLE: &[KnownChip] = &[
     KnownChip {
         jedec: [0x20, 0x20, 0x15], name: "Micron/Numonyx M25P16",
@@ -84,7 +82,6 @@ pub static FALLBACK_TABLE: &[KnownChip] = &[
 ];
 
 /// Build a `FlashProfile` for a chip in the fallback table, else `None`.
-#[allow(dead_code)] // wired in Task 15 (detect: JEDEC fallback-table lookup)
 pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
     FALLBACK_TABLE.iter().find(|c| c.jedec == jedec).map(|c| FlashProfile {
         page_size: c.page_size,
@@ -97,31 +94,32 @@ pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
 
 pub const SFDP_SIGNATURE: [u8; 4] = *b"SFDP";
 
-/// 8-byte SFDP header.
-#[allow(dead_code)] // wired in Task 15 (detect_profile reads the header version/nph fields)
+/// 8-byte SFDP header. `major`/`minor` (the SFDP revision) are decoded but not
+/// yet read; only `nph` drives detection today.
 #[derive(Debug, Clone, Copy)]
-pub struct SfdpHeader { pub major: u8, pub minor: u8, pub nph: u8 }
+pub struct SfdpHeader {
+    #[allow(dead_code)]
+    pub major: u8,
+    #[allow(dead_code)]
+    pub minor: u8,
+    pub nph: u8,
+}
 
 impl SfdpHeader {
-    #[allow(dead_code)] // wired in Task 15 (detect_profile parses the SFDP header)
     pub fn parse(b: &[u8]) -> Option<SfdpHeader> {
         if b.len() < 8 || b[0..4] != SFDP_SIGNATURE { return None; }
         Some(SfdpHeader { minor: b[4], major: b[5], nph: b[6] })
     }
     /// Parameter-header count (`nph` is the count minus one).
-    #[allow(dead_code)] // wired in Task 15 (detect_profile walks the parameter headers)
     pub fn param_header_count(&self) -> usize { self.nph as usize + 1 }
 }
 
 /// 8-byte parameter header.
-#[allow(dead_code)] // wired in Task 15 (detect_profile reads the id/length/pointer fields)
 #[derive(Debug, Clone, Copy)]
 pub struct ParamHeader { pub id: u16, pub length_dwords: u8, pub table_pointer: u32 }
 
 impl ParamHeader {
-    #[allow(dead_code)] // wired in Task 15 (detect_profile locates the BFPT by id)
     pub const BFPT_ID: u16 = 0xFF00;
-    #[allow(dead_code)] // wired in Task 15 (detect_profile walks the parameter headers)
     pub fn parse(b: &[u8]) -> Option<ParamHeader> {
         if b.len() < 8 { return None; }
         Some(ParamHeader {
@@ -148,7 +146,6 @@ fn dword(b: &[u8], idx1: usize) -> Option<u32> {
 
 impl Bfpt {
     /// Defensive: missing dwords fall back to sane defaults.
-    #[allow(dead_code)] // wired in Task 15 (detect_profile decodes the BFPT into a FlashProfile)
     pub fn parse(b: &[u8]) -> Bfpt {
         let d1 = dword(b, 1).unwrap_or(0);
         let address_bytes = if (d1 >> 17) & 0b11 == 2 { 4 } else { 3 };

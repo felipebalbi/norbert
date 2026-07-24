@@ -147,7 +147,7 @@ fn main() -> Result<()> {
                     .inspect_err(|_| { let _ = f.release_bus(); })?; }
                 f.release_bus().map_err(anyhow_from)?;
             } else {
-                let res = f.flash_bitstream(*offset, &image, !*no_verify, size, |p| {
+                let res = f.flash_bitstream(*offset, &image, true, !*no_verify, size, |p| {
                     pb.set_message(match p {
                         Progress::Detecting => "detecting flash (SFDP)…".to_string(),
                         Progress::Erasing => "erasing…".to_string(),

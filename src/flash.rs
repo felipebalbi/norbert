@@ -4,7 +4,7 @@ use core::fmt;
 use std::time::Duration;
 use embedded_hal::spi::{Operation, SpiDevice};
 
-use crate::sfdp::{plan_erase, FlashProfile};
+use crate::sfdp::{lookup_fallback, plan_erase, Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
 const CMD_RDID: u8 = 0x9F;
@@ -13,7 +13,6 @@ const CMD_RDSR: u8 = 0x05;
 const CMD_READ: u8 = 0x03;
 const CMD_PP:   u8 = 0x02;
 const CMD_CE:   u8 = 0xC7; // chip erase
-#[allow(dead_code)] // wired in Task 15 (detect: read_sfdp issues 0x5A)
 const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
 const SR_WIP:   u8 = 0x01;
 
@@ -42,12 +41,10 @@ impl FlashId {
 
     /// True if a chip actually responded to RDID (an idle/floating bus reads
     /// all `0x00` or all `0xFF`).
-    #[allow(dead_code)] // wired in Task 15 (SFDP detect: chip-presence check)
     pub fn is_present(&self) -> bool {
         self.manufacturer != 0x00 && self.manufacturer != 0xFF
     }
 
-    #[allow(dead_code)] // wired in Task 15 (fallback-table lookup by JEDEC id)
     pub fn jedec(&self) -> [u8; 3] { [self.manufacturer, self.mem_type, self.capacity_code] }
 }
 
@@ -86,7 +83,6 @@ impl BusAccess for NoHold {
 /// Progress callback events for the high-level flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
-    #[allow(dead_code)] // emitted in Task 15 (SFDP detect); main.rs only matches it
     Detecting,          // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
     Erasing,
     Programming(usize), // bytes written so far
@@ -103,10 +99,8 @@ pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
     VerifyMismatch { addr: usize, expected: u8, got: u8 },
     TooLarge { need: usize, have: usize },
     /// RDID read nothing — no chip on the bus.
-    #[allow(dead_code)] // constructed in Task 15 (detect)
     NoFlash,
     /// A chip responded but has no SFDP and no fallback-table entry.
-    #[allow(dead_code)] // constructed in Task 15 (detect)
     UnsupportedChip { jedec: [u8; 3] },
     /// A geometry op was attempted before `detect_profile` succeeded.
     NotDetected,
@@ -178,7 +172,6 @@ where
 
     /// Read `buf.len()` bytes from SFDP space at `addr`
     /// (0x5A + 24-bit addr + 8 dummy cycles).
-    #[allow(dead_code)] // wired in Task 15 (detect_profile reads SFDP to build a FlashProfile)
     pub fn read_sfdp(&mut self, addr: u32, buf: &mut [u8])
         -> Result<(), FlashError<SPI::Error, RST::Error>>
     {
@@ -212,13 +205,66 @@ where
     }
 
     /// Active flash profile, or `None` until `detect_profile` succeeds.
-    #[allow(dead_code)] // read in Task 15 (detect) / Task 18 (profile-driven addressing)
     pub fn profile(&self) -> Option<&FlashProfile> { self.profile.as_ref() }
-    #[allow(dead_code)] // wired in Task 15 (detect stores the resolved profile)
     pub fn set_profile(&mut self, profile: FlashProfile) { self.profile = Some(profile); }
 
     fn require_profile(&self) -> Result<&FlashProfile, FlashError<SPI::Error, RST::Error>> {
         self.profile.as_ref().ok_or(FlashError::NotDetected)
+    }
+
+    /// Resolve how to talk to the flash and store the profile in `self`:
+    /// RDID (absent → `NoFlash`) → SFDP → JEDEC fallback table → else
+    /// `UnsupportedChip`. **Never guesses.** Requires the bus (call while acquired).
+    pub fn detect_profile(&mut self) -> Result<FlashProfile, FlashError<SPI::Error, RST::Error>> {
+        let id = self.read_id()?;
+        if !id.is_present() {
+            return Err(FlashError::NoFlash);
+        }
+        // 1) The chip describes itself.
+        if let Some(profile) = self.try_sfdp_profile(id)? {
+            self.set_profile(profile.clone());
+            return Ok(profile);
+        }
+        // 2) A known no-SFDP part.
+        if let Some(profile) = lookup_fallback(id.jedec()) {
+            self.set_profile(profile.clone());
+            return Ok(profile);
+        }
+        // 3) Present but unknown → don't guess.
+        Err(FlashError::UnsupportedChip { jedec: id.jedec() })
+    }
+
+    /// Build a profile from SFDP; `Ok(None)` if the chip has no usable SFDP.
+    fn try_sfdp_profile(&mut self, id: FlashId)
+        -> Result<Option<FlashProfile>, FlashError<SPI::Error, RST::Error>>
+    {
+        let mut header = [0u8; 8];
+        self.read_sfdp(0, &mut header)?;
+        let Some(h) = SfdpHeader::parse(&header) else { return Ok(None); };
+
+        let mut bfpt_ph = None;
+        for i in 0..h.param_header_count() {
+            let mut ph = [0u8; 8];
+            self.read_sfdp(8 + (i as u32) * 8, &mut ph)?;
+            if let Some(p) = ParamHeader::parse(&ph) {
+                if p.id == ParamHeader::BFPT_ID { bfpt_ph = Some(p); break; }
+            }
+        }
+        let Some(p) = bfpt_ph else { return Ok(None); };
+
+        let mut bytes = vec![0u8; p.length_dwords as usize * 4];
+        self.read_sfdp(p.table_pointer, &mut bytes)?;
+        let bfpt = Bfpt::parse(&bytes);
+        if bfpt.erase_types.is_empty() {
+            return Ok(None); // SFDP present but unusable → fall through to the table
+        }
+        Ok(Some(FlashProfile {
+            page_size: bfpt.page_size,
+            address_bytes: bfpt.address_bytes,
+            capacity: bfpt.capacity.or(id.capacity_bytes()),
+            erase_types: bfpt.erase_types,
+            source: ProfileSource::Sfdp,
+        }))
     }
 
     /// Erase one block/sector at `addr` using erase `opcode`.
@@ -335,22 +381,29 @@ where
         self.reset.release().map_err(Self::bus_err)
     }
 
-    /// Full flow: reset → erase covered region → program → (verify) → release.
+    /// Full flow: acquire bus → (detect) → erase covered region → program → (verify) → release.
     /// On any error the caller should still call `release_bus` (see main.rs).
     pub fn flash_bitstream(
         &mut self,
         offset: usize,
         image: &[u8],
+        detect: bool,
         verify: bool,
         flash_size: Option<usize>,
         mut progress: impl FnMut(Progress),
     ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        if let Some(sz) = flash_size {
+        self.acquire_bus()?;
+        if detect {
+            progress(Progress::Detecting);
+            self.detect_profile()?;
+        }
+        let size = self.profile().and_then(|p| p.capacity).or(flash_size);
+        if let Some(sz) = size {
             if offset + image.len() > sz {
+                let _ = self.release_bus();
                 return Err(FlashError::TooLarge { need: offset + image.len(), have: sz });
             }
         }
-        self.acquire_bus()?;
         progress(Progress::Erasing);
         self.erase_range(offset, image.len())?;
         progress(Progress::Programming(0));
@@ -485,7 +538,7 @@ mod tests {
 
         let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let mut events = Vec::new();
-        f.flash_bitstream(0, &image, true, Some(2 * 1024 * 1024), |p| events.push(p))
+        f.flash_bitstream(0, &image, false, true, Some(2 * 1024 * 1024), |p| events.push(p))
             .unwrap();
 
         assert_eq!(&probe.mem()[..1000], &image[..]);
@@ -496,11 +549,16 @@ mod tests {
 
     #[test]
     fn flash_bitstream_rejects_oversize() {
-        let flash = FakeFlash::new(1024, [0x1C, 0x70, 0x15]);
+        let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
         let mut f = flasher(flash, FakeBus::new(), 64);
+        f.set_profile(crate::sfdp::FlashProfile {
+            page_size: 256, address_bytes: 3, capacity: Some(1024),
+            erase_types: vec![crate::sfdp::EraseType { size: 64 * 1024, opcode: 0xD8 }],
+            source: crate::sfdp::ProfileSource::Table,
+        });
         let image = vec![0u8; 2048];
         assert!(matches!(
-            f.flash_bitstream(0, &image, false, Some(1024), |_| {}),
+            f.flash_bitstream(0, &image, false, false, None, |_| {}),
             Err(FlashError::TooLarge { .. })
         ));
     }
@@ -542,6 +600,76 @@ mod tests {
         let mut hdr = [0u8; 8];
         f.read_sfdp(0, &mut hdr).unwrap();
         assert_eq!(&hdr[0..4], b"SFDP");
+    }
+
+    // Full SFDP image: header@0, BFPT param header@8, BFPT@0x10.
+    fn sfdp_blob() -> Vec<u8> {
+        let mut v = vec![0xFFu8; 0x10];
+        v[0..8].copy_from_slice(&[0x53, 0x46, 0x44, 0x50, 0x06, 0x01, 0x00, 0xFF]); // "SFDP" rev1.6 nph=0
+        v[8..16].copy_from_slice(&[0x00, 0x01, 0x01, 0x0B, 0x10, 0x00, 0x00, 0xFF]); // BFPT id0xFF00 len11 ptp0x10
+        let mut b = vec![0u8; 11 * 4];
+        b[0..4].copy_from_slice(&[0xE5, 0x20, 0x00, 0x00]);
+        b[4..8].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0x00]);
+        b[28..32].copy_from_slice(&[0x0C, 0x20, 0x0F, 0x52]);
+        b[32..36].copy_from_slice(&[0x10, 0xD8, 0x00, 0x00]);
+        b[40..44].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&b);
+        v
+    }
+
+    #[test]
+    fn detect_via_sfdp_builds_profile() {
+        use crate::sfdp::ProfileSource;
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x15]);
+        flash.set_sfdp(&sfdp_blob());
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let p = f.detect_profile().unwrap();
+        assert_eq!(p.source, ProfileSource::Sfdp);
+        assert_eq!(p.page_size, 256);
+        assert_eq!(p.capacity, Some(2 * 1024 * 1024));
+        assert_eq!(p.erase_types.len(), 3);
+        assert_eq!(p.erase_types[0].size, 64 * 1024); // largest first
+    }
+
+    #[test]
+    fn detect_uses_fallback_table_for_m25p16() {
+        use crate::sfdp::{EraseType, ProfileSource};
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]); // M25P16: no SFDP, in table
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let p = f.detect_profile().unwrap();
+        assert_eq!(p.source, ProfileSource::Table);
+        assert_eq!(p.capacity, Some(2 * 1024 * 1024));
+        assert_eq!(p.erase_types, vec![EraseType { size: 64 * 1024, opcode: 0xD8 }]);
+    }
+
+    #[test]
+    fn detect_unsupported_chip_errs() {
+        // A chip responds, but no SFDP and not in the table.
+        let flash = FakeFlash::new(1024, [0xAB, 0xCD, 0xEF]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        assert!(matches!(f.detect_profile(), Err(FlashError::UnsupportedChip { .. })));
+    }
+
+    #[test]
+    fn detect_no_flash_errs() {
+        // Idle/floating bus: RDID reads all 0xFF.
+        let flash = FakeFlash::new(1024, [0xFF, 0xFF, 0xFF]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        assert!(matches!(f.detect_profile(), Err(FlashError::NoFlash)));
+    }
+
+    #[test]
+    fn flash_bitstream_detects_first() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x15]);
+        flash.set_sfdp(&sfdp_blob());
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        let mut events = Vec::new();
+        f.flash_bitstream(0, &image, true, true, None, |p| events.push(p)).unwrap();
+        assert_eq!(events.first(), Some(&Progress::Detecting));
+        assert_eq!(&probe.mem()[..1000], &image[..]);
+        assert_eq!(f.profile().unwrap().source, crate::sfdp::ProfileSource::Sfdp);
     }
 
     #[derive(Debug)]
