@@ -51,6 +51,9 @@ mod tests {
             protected().to_string(),
             unsupported([0xAB, 0xCD, 0xEF]),
             reset_done().to_string(),
+            doctor_rdid_fail().to_string(),
+            doctor_unstable().to_string(),
+            nothing_unusual().to_string(),
             version(),
         ];
         for line in lines {

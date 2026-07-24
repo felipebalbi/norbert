@@ -429,9 +429,11 @@ fn run() -> Result<()> {
             }
             println!("chip: {}", catalog::describe(id.jedec()));
             // 2. All three ID bytes equal → MISO/power suspicion.
+            let mut warned = false;
             if id.manufacturer == id.mem_type && id.mem_type == id.capacity_code {
                 println!("WARNING: all three JEDEC bytes are 0x{:02X} — MISO may be stuck or power/wiring is wrong.",
                     id.manufacturer);
+                warned = true;
             }
             // 3. SFDP.
             match sfdp_res {
@@ -458,64 +460,87 @@ fn run() -> Result<()> {
                 }
             }
             // 5. Summary.
-            if stable {
+            if stable && !warned {
                 out.emit(voice::nothing_unusual(), Some("OK"));
             } else {
-                out.emit(voice::doctor_unstable(), Some("WARN: unstable"));
+                out.emit(voice::doctor_unstable(), Some("WARN"));
             }
         }
         Cmd::Test { sector } => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
             f.acquire_bus().map_err(anyhow_from)?;
-            let res = (|| -> Result<()> {
-                f.detect_profile().map_err(norbert_from)?;
-                match sector {
-                    None => {
-                        // Read-only bus-stability check: read the first 4 KiB twice, compare.
+            if let Err(e) = f.detect_profile() {
+                let _ = f.release_bus();
+                return Err(norbert_from(e));
+            }
+            match sector {
+                None => {
+                    // Read-only bus-stability check: read the first 4 KiB twice, compare.
+                    let res = (|| -> Result<bool> {
                         let n = 4096;
                         let mut a = vec![0u8; n];
                         let mut b = vec![0u8; n];
                         f.read(0, &mut a).map_err(anyhow_from)?;
                         f.read(0, &mut b).map_err(anyhow_from)?;
-                        if a != b {
-                            return Err(anyhow::anyhow!(
-                                "read-back inconsistent between two reads — signal integrity suspect"));
-                        }
-                        Ok(())
+                        Ok(a == b)
+                    })();
+                    let _ = f.release_bus();
+                    if !res? {
+                        return Err(anyhow::anyhow!(
+                            "read-back inconsistent between two reads — signal integrity suspect"));
                     }
-                    Some(n) => {
-                        // Destructive on sector n: refuse if protected.
-                        if f.is_protected().map_err(anyhow_from)? {
-                            // Signal via a sentinel so the outer code can voice it.
-                            anyhow::bail!("__PROTECTED__");
+                    out.emit(voice::nothing_unusual(), Some("OK"));
+                }
+                Some(n) => {
+                    // Refuse a protected part before touching anything.
+                    match f.is_protected() {
+                        Ok(true) => {
+                            let _ = f.release_bus();
+                            out.emit(voice::protected(), Some("FAIL: protected"));
+                            std::process::exit(1);
                         }
-                        let sec = f.profile().map(|p| p.min_erase()).unwrap_or(4096);
-                        let base = *n * sec;
-                        let mut backup = vec![0u8; sec];
-                        f.read(base, &mut backup).map_err(anyhow_from)?;
+                        Ok(false) => {}
+                        Err(e) => { let _ = f.release_bus(); return Err(anyhow_from(e)); }
+                    }
+                    let sec = f.profile().map(|p| p.min_erase()).unwrap_or(4096);
+                    let cap = f.profile().and_then(|p| p.capacity);
+                    let base = n.saturating_mul(sec);
+                    if let Some(cap) = cap {
+                        if base.saturating_add(sec) > cap {
+                            let _ = f.release_bus();
+                            return Err(anyhow::anyhow!(
+                                "sector {n} is out of range (chip holds {} sectors of {} bytes)",
+                                cap / sec, sec));
+                        }
+                    }
+                    // Back up the sector before destroying it.
+                    let mut backup = vec![0u8; sec];
+                    if let Err(e) = f.read(base, &mut backup) {
+                        let _ = f.release_bus();
+                        return Err(anyhow_from(e));
+                    }
+                    // Destructive pattern test.
+                    let pattern: Vec<u8> = (0..sec).map(|i| (i as u8) ^ 0xA5).collect();
+                    let test_res = (|| -> Result<()> {
                         f.erase_range(base, sec).map_err(anyhow_from)?;
-                        let pattern: Vec<u8> = (0..sec).map(|i| (i as u8) ^ 0xA5).collect();
                         f.program(base, &pattern, |_| {}).map_err(anyhow_from)?;
                         f.verify(base, &pattern, |_| {}).map_err(norbert_from)?;
-                        // Restore original contents.
+                        Ok(())
+                    })();
+                    // ALWAYS attempt to restore the original, even if the test failed.
+                    let restore_res = (|| -> Result<()> {
                         f.erase_range(base, sec).map_err(anyhow_from)?;
                         f.program(base, &backup, |_| {}).map_err(anyhow_from)?;
                         f.verify(base, &backup, |_| {}).map_err(anyhow_from)?;
                         Ok(())
-                    }
-                }
-            })();
-            let _ = f.release_bus();
-            // Handle the protected sentinel with a voice line; otherwise propagate.
-            if let Err(e) = &res {
-                if e.to_string() == "__PROTECTED__" {
-                    out.emit(voice::protected(), Some("FAIL: protected"));
-                    std::process::exit(1);
+                    })();
+                    let _ = f.release_bus();
+                    test_res?;
+                    restore_res.context("sector test passed but restoring the original contents failed")?;
+                    out.emit(voice::nothing_unusual(), Some("OK"));
                 }
             }
-            res?;
-            out.emit(voice::nothing_unusual(), Some("OK"));
         }
     }
     Ok(())
