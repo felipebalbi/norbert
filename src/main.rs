@@ -61,6 +61,11 @@ impl Cli {
 enum Cmd {
     /// Read and print the flash JEDEC ID (bring-up check).
     Id,
+    /// Read + print JEDEC ID and SFDP/profile info.
+    Info,
+    /// Detect and print the flash profile the tool will use (SFDP or fallback table).
+    #[command(alias = "discover")]
+    Detect,
     /// Erase + program + verify a bitstream at an offset, then boot it.
     Write {
         bitstream: PathBuf,
@@ -128,6 +133,34 @@ fn main() -> Result<()> {
             let id = f.read_id().map_err(anyhow_from)?;
             println!("{id}");
         }
+        Cmd::Info => {
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let out = (|| -> Result<()> {
+                let id = f.read_id().map_err(anyhow_from)?;
+                if !id.is_present() {
+                    println!("no SPI-NOR flash detected (bus reads all 0x00/0xFF)");
+                    return Ok(());
+                }
+                println!("JEDEC id: {id}");
+                match f.detect_profile() {
+                    Ok(p) => print_profile(&p),
+                    Err(FlashError::UnsupportedChip { jedec }) => println!(
+                        "unsupported: JEDEC {jedec:02X?} — no SFDP and no fallback-table entry (add one to FALLBACK_TABLE)"),
+                    Err(e) => return Err(anyhow_from(e)),
+                }
+                Ok(())
+            })();
+            let _ = f.release_bus();
+            out?;
+        }
+        Cmd::Detect => {
+            let mut f = build_flasher(&cli)?;
+            f.acquire_bus().map_err(anyhow_from)?;
+            let res = f.detect_profile().map_err(anyhow_from);
+            let _ = f.release_bus();
+            print_profile(&res?);
+        }
         Cmd::Write { bitstream, offset, no_verify, chip_erase } => {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
@@ -138,6 +171,8 @@ fn main() -> Result<()> {
             let pb = spinner();
             if *chip_erase {
                 f.acquire_bus().map_err(anyhow_from)?;
+                let r = f.detect_profile().map_err(anyhow_from);
+                if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
                 pb.set_message("chip erase…");
                 let r = f.chip_erase().map_err(anyhow_from);
                 if let Err(e) = r { let _ = f.release_bus(); return Err(e); }
@@ -211,4 +246,18 @@ fn spinner() -> ProgressBar {
 
 fn anyhow_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> anyhow::Error {
     anyhow::anyhow!("{e}")
+}
+
+fn print_profile(p: &sfdp::FlashProfile) {
+    println!("source:   {:?}", p.source);
+    println!("page:     {} B", p.page_size);
+    println!("address:  {}-byte", p.address_bytes);
+    match p.capacity {
+        Some(c) => println!("capacity: {} KiB", c / 1024),
+        None => println!("capacity: unknown"),
+    }
+    println!("erase types:");
+    for e in &p.erase_types {
+        println!("  {:>7} B  op 0x{:02X}", e.size, e.opcode);
+    }
 }
