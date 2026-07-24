@@ -321,13 +321,11 @@ where
     }
 
     /// True if any block-protect bit is set.
-    #[allow(dead_code)] // wired in Task 23/24
     pub fn is_protected(&mut self) -> Result<bool, FlashError<SPI::Error, RST::Error>> {
         Ok(self.read_status()? & SR_BP_MASK != 0)
     }
 
     /// Set block-protection (WREN + WRSR with BP bits set).
-    #[allow(dead_code)] // wired in Task 23
     pub fn protect(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.write_enable()?;
         self.spi.transaction(&mut [Operation::Write(&[CMD_WRSR, SR_BP_MASK])]).map_err(Self::spi_err)?;
@@ -335,7 +333,6 @@ where
     }
 
     /// Flash software reset: 0x66 (enable) then 0x99 (reset).
-    #[allow(dead_code)] // wired in Task 23
     pub fn reset_flash(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.spi.transaction(&mut [Operation::Write(&[CMD_RSTEN])]).map_err(Self::spi_err)?;
         self.spi.transaction(&mut [Operation::Write(&[CMD_RST])]).map_err(Self::spi_err)
