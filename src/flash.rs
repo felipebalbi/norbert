@@ -549,7 +549,11 @@ where
     /// Deep Power-Down, so a flash the FPGA put to sleep after config responds.
     pub fn acquire_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.reset.acquire().map_err(Self::bus_err)?;
-        self.wake()
+        if let Err(e) = self.wake() {
+            let _ = self.release_bus(); // don't leave the held master stuck in reset
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Release CRESET (Hi-Z) so the FPGA reconfigures from flash.
