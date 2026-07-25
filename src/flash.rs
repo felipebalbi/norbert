@@ -20,6 +20,7 @@ const CMD_SFDP: u8 = 0x5A; // read SFDP parameter space
 const CMD_EN4B: u8 = 0xB7; // enter 4-byte addressing mode
 const CMD_RSTEN: u8 = 0x66; // enable reset
 const CMD_RST: u8 = 0x99; // software reset
+const CMD_RELEASE_PD: u8 = 0xAB; // Release from Deep Power-Down
 const SR_WIP: u8 = 0x01;
 const SR_BP_MASK: u8 = 0x1C; // BP0..BP2 (typical)
 
@@ -530,9 +531,25 @@ where
         Ok(())
     }
 
-    /// Hold the FPGA in reset (CRESET low, tri-states the shared bus).
+    /// Release the flash from Deep Power-Down (0xAB), then wait tRES1.
+    ///
+    /// An iCE40 (and similar) puts its configuration flash into deep power-down
+    /// after loading its bitstream; in that state the flash ignores every command
+    /// except 0xAB. This is a no-op on a flash that is already awake.
+    pub fn wake(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        self.spi
+            .transaction(&mut [Operation::Write(&[CMD_RELEASE_PD])])
+            .map_err(Self::spi_err)?;
+        // tRES1 is ~3 us on a W25Q; a USB round-trip already covers it, but be explicit.
+        std::thread::sleep(Duration::from_micros(50));
+        Ok(())
+    }
+
+    /// Take the shared bus (hold any other master off) and wake the flash from
+    /// Deep Power-Down, so a flash the FPGA put to sleep after config responds.
     pub fn acquire_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        self.reset.acquire().map_err(Self::bus_err)
+        self.reset.acquire().map_err(Self::bus_err)?;
+        self.wake()
     }
 
     /// Release CRESET (Hi-Z) so the FPGA reconfigures from flash.
@@ -955,6 +972,35 @@ mod tests {
         f.reset_flash().unwrap(); // 0x66 then 0x99
     }
 
+    #[test]
+    fn wake_releases_power_down() {
+        // An iCE40 leaves its config flash in Deep Power-Down after booting.
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x18]);
+        flash.set_powered_down(true);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        // Asleep: RDID reads 0xFF -> not present.
+        assert!(!f.read_id().unwrap().is_present());
+        // Wake it, then RDID works.
+        f.wake().unwrap();
+        assert_eq!(
+            f.read_id().unwrap(),
+            FlashId {
+                manufacturer: 0xEF,
+                mem_type: 0x40,
+                capacity_code: 0x18
+            }
+        );
+    }
+
+    #[test]
+    fn acquire_bus_wakes_the_flash() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x18]);
+        flash.set_powered_down(true);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        f.acquire_bus().unwrap(); // must hold the bus AND wake the flash
+        assert!(f.read_id().unwrap().is_present());
+    }
+
     #[derive(Debug)]
     pub struct FakeErr;
     impl SpiErrorTrait for FakeErr {
@@ -969,8 +1015,9 @@ mod tests {
         wel: bool,
         busy_reads: u32, // # of RDSR calls that report WIP=1 before clearing
         sfdp: Vec<u8>,
-        mode4b: bool,    // true once EN4B (0xB7) seen → 32-bit addresses
-        protected: bool, // true once BP bits set → PAGE PROGRAM silently no-ops
+        mode4b: bool,       // true once EN4B (0xB7) seen → 32-bit addresses
+        protected: bool,    // true once BP bits set → PAGE PROGRAM silently no-ops
+        powered_down: bool, // true once 0xB9 seen → ignores all but 0xAB (models the iCE40)
     }
 
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
@@ -988,6 +1035,7 @@ mod tests {
                 sfdp: Vec::new(),
                 mode4b: false,
                 protected: false,
+                powered_down: false,
             })))
         }
         fn set_busy_reads(&self, n: u32) {
@@ -998,6 +1046,9 @@ mod tests {
         }
         fn set_protected(&self, p: bool) {
             self.0.borrow_mut().protected = p;
+        }
+        fn set_powered_down(&self, p: bool) {
+            self.0.borrow_mut().powered_down = p;
         }
         fn mem(&self) -> Vec<u8> {
             self.0.borrow().mem.clone()
@@ -1047,6 +1098,9 @@ mod tests {
                 a
             };
             match mosi[0] {
+                CMD_RELEASE_PD => st.powered_down = false, // 0xAB wakes it
+                0xB9 => st.powered_down = true, // 0xB9 = Deep Power-Down (models the FPGA)
+                _ if st.powered_down => {}      // asleep: ignore every other command
                 CMD_RDID => resp.extend_from_slice(&st.id),
                 CMD_WREN => st.wel = true,
                 CMD_EN4B => st.mode4b = true,
