@@ -131,3 +131,46 @@ Read the firmware + gallo source in the workspace (`crates/pico-de-gallo-firmwar
   `norbert --hold-active low --hold-release hi-z --freq 1000000 info`
 - Still confirm the MOSI/MISO (io0/io1) orientation: flash IO0/SI → pin 6 (MOSI),
   flash IO1/SO → pin 5 (MISO).
+
+---
+
+## Session 3 — first real hardware success + two follow-ups
+
+**IT WORKS (read path).** With the 0xAB deep-power-down wake + `--hold-release drive-high`
+(no CRESET pull-up on the iCEbreaker), `norbert info` returns the real chip:
+`EF 40 18` = Winbond W25Q128JV, SFDP-sourced, full erase menu (64K/32K/4K). So detect/
+info/jedec/sfdp/list + the whole SFDP/BFPT/catalog stack are validated on real silicon.
+
+Root cause chain that got us here (for the record):
+- MOSI/MISO were swapped on the flash side (fixed by the user).
+- The flash was in **Deep Power-Down**: the iCE40 sends **0xB9** to the flash after config
+  (seen in the boot capture, frame 9). In DPD the flash ignores everything except **0xAB**.
+  Fix landed: `Flasher::wake()` sends 0xAB after `acquire_bus` (all-or-nothing on error).
+
+### Follow-up 1 (BUG) — `program` panics: `SpiBatchOp encode failed: SerializeBufferFull`
+- **Root cause:** `pico-de-gallo-internal::encode_spi_batch_ops` encodes each `SpiBatchOp`
+  into a **128-byte** scratch buffer (`tmp = [0u8; 128]`) and `.expect()`s — so a single
+  `Write` op can carry only ~126 bytes. norbert's `max_chunk = MAX_TRANSFER_SIZE.min(PAGE_SIZE)`
+  = `min(4096, 256)` = **256**, so `page_program` emits a 256-byte Write op → overflow → PANIC.
+  (`MAX_TRANSFER_SIZE = 4096` bounds the *response*/read side, not a single write op.)
+- **Why reads were fine:** a `Read` op carries only a length in the request (tiny); the data
+  returns in the response (≤ 4096). Only *writes* hit the 128-byte per-op cap.
+- **Fix (flash.rs, TDD):** chunk `page_program`'s data into <= ~120-byte `Write` ops (128 minus
+  postcard framing), independent of `max_chunk` (which can stay large for reads). A 256-byte
+  page → header + 3 write ops, well under `MAX_BATCH_OPS = 64`. Add a test that a >128-byte
+  program stays within the per-op limit. The HAL *panics* (doesn't return Err) on overflow, so
+  norbert must respect 128/op proactively. (Reads could later be widened to 4096/txn for speed.)
+
+### Follow-up 2 (FEATURE, general robustness) — drive /WP (IO2) and /HOLD (IO3) high
+- In single-SPI, IO2 = /WP and IO3 = /HOLD. Both must be **high**: /HOLD low pauses the flash
+  (no response); /WP low (with SRP0 set) blocks WRSR so you can't clear block-protect bits.
+- norbert currently *assumes* they're held high externally (true for breakouts/in-circuit
+  boards like the iCEbreaker, but not for a bare chip on a clip with no pull-ups).
+- **Proposed:** optional `--wp-gpio` / `--io3-gpio` (default User GPIO 2 / 3, driven high on
+  connect/acquire, with an off switch). Harmless when redundant, essential for a bare chip.
+  Makes norbert drive the full single-SPI signal set. Small addition to device.rs/main.rs.
+
+### Current defaults reminder
+`--cs 0` (pin 11), `--hold-gpio 1` (pin 12). iCEbreaker needs `--hold-release drive-high`
+(no CRESET pull-up). Working invocation:
+`norbert --cs 0 --hold-gpio 1 --hold-active low --hold-release drive-high --freq 1000000 info`
