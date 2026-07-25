@@ -174,3 +174,54 @@ Root cause chain that got us here (for the record):
 `--cs 0` (pin 11), `--hold-gpio 1` (pin 12). iCEbreaker needs `--hold-release drive-high`
 (no CRESET pull-up). Working invocation:
 `norbert --cs 0 --hold-gpio 1 --hold-active low --hold-release drive-high --freq 1000000 info`
+
+---
+
+## Session 4 — `program` validated on hardware (write path works)
+
+**IT WORKS (write path).** The operator ran, while manually holding CRESET:
+```
+norbert --cs 0 --hold-gpio 1 --hold-active low --hold-release drive-high --freq 1000000 \
+        program ../hdl/mole/fpga/Mole/gen/MoleTop.bin
+→ Programming...
+→ Done. Have a nice boot.
+```
+`Done. Have a nice boot.` is emitted only after the full closure succeeds, so erase →
+program → **verify** (no `--no-verify`, so readback ran and matched) → release all passed on a
+104090-byte bitstream. The whole erase/page-program/verify stack is now validated on silicon.
+
+### How `SerializeBufferFull` was actually fixed (differs from Session 3's plan)
+- Session 3 Follow-up 1 proposed a **norbert-side** fix (split `page_program` into ≤120-byte
+  Write ops so each fits the HAL's 128-byte per-op scratch buffer).
+- What we did instead: bumped the scratch buffer **128 → 1024** in the *local* pico-de-gallo
+  (`pico-de-gallo-internal`, both `encode_spi_batch_ops` **and** `encode_i2c_batch_ops`; committed
+  there as `Bump batch ops buffer to 1024`, HEAD `3a6aefc`). norbert's `Cargo.toml` was switched
+  to **path deps** on the local `pico-de-gallo-hal` + `pico-de-gallo-lib`, which path-chain to the
+  patched `internal`. norbert's 256-byte page-program op now serializes to ~258 B, well under 1024.
+- **Consequence / loose end:** the fix lives in a *local* checkout. Against the **stock released
+  0.6.0** crates (128-B buffer) norbert would still overflow. Durability deferred by decision —
+  **keep the local path-dep for now**; the norbert-side ≤120-B chunk (Session 3) remains the
+  portable alternative if we later want norbert to work against unmodified released crates.
+
+### Debug note — the dep swap did NOT break the read path (software exonerated)
+After switching to path deps, `info` regressed to `FF FF FF` ("no flash"). Proven to be
+**hardware/firmware state, not the swap**:
+- Local `lib`/`hal` are byte-identical to the released 0.6.0 — the last commit touching either is
+  the `hal-v0.6.0`/`library-v0.6.0` release commit (`2f10b4d`); no post-release drift.
+- The only `internal` delta is the scratch-buffer size, which cannot change a ~4-byte JEDEC
+  batch's wire bytes (buffer bounds *capacity*, not output for small ops).
+- `FF FF FF` = MISO idle-high = flash not selected/driving (not contention, which pulls toward
+  `00`). A **power-cycle + manual CRESET hold** restored `EF 40 18`.
+
+### Operational lessons (bench workflow)
+- **CRESET is held by hand.** In this setup the operator physically holds the CRESET pin during
+  the operation for norbert to own the shared bus; the `--hold-gpio` drive is not the effective
+  reset control here. → **The operator runs the hardware commands**, timed with the hold; the
+  agent hands over the exact command and asks.
+- **Never run norbert invocations back-to-back.** Each process claims the USB interface and the
+  next one races it → panic at `postcard-rpc raw_nusb.rs:330`:
+  `Failed claiming interface: ResourceBusy (code 16)`. One run at a time; let each fully exit.
+  (Same one-session-per-interface limit as pico-de-gallo AGENTS.md §13.17, 2026-07-20.)
+- A host **panic mid-`program`** (the old `SerializeBufferFull`) can leave a Pico GPIO wedged
+  until power-cycle; the buffer fix removes that panic, and program's error path releases the bus
+  on a normal `Err`, so failures no longer wedge a pin.

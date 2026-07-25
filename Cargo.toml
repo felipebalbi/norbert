@@ -6,8 +6,8 @@ license = "MIT"
 authors = ["Felipe Balbi <felipe@balbi.sh>"]
 
 [dependencies]
-pico-de-gallo-hal = "0.6"
-pico-de-gallo-lib = "0.6"          # MAX_TRANSFER_SIZE, list_devices
+pico-de-gallo-hal = { path = "../pico-de-gallo/crates/pico-de-gallo-hal" }
+pico-de-gallo-lib = { path = "../pico-de-gallo/crates/pico-de-gallo-lib" }   # MAX_TRANSFER_SIZE, list_devices
 embedded-hal = "1.0"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
