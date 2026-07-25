@@ -92,4 +92,42 @@ flash IO1/DO → pin 5.
 
 - norbert CLI/logic: build clean, 32/32 unit tests pass against the behavioral `FakeFlash`.
 - Bus discipline: every command releases the hold GPIO on all paths (reviewed).
-- The `--cs`/`--hold-gpio` mapping: confirmed correct against the v1.1 pinout table above.
+- The `--cs`/`--hold-gpio` mapping: user GPIO 0-3 = RP2350 GPIO 8-11 = header pins 11-14.
+
+---
+
+## Session 2 — firmware deep-dive (SPI/CS mechanics) — SUPERSEDES some guesses above
+
+Read the firmware + gallo source in the workspace (`crates/pico-de-gallo-firmware`,
+`crates/pico-de-gallo-app`, `crates/pico-de-gallo-lib`). Findings:
+
+- **Raw SPI (`gallo spi write`/`read`/`transfer`) drives NO chip-select.** The firmware
+  handlers just call `context.spi.{write,read,transfer}()`. SPI0 is created as
+  `Spi::new(SPI0, PIN_6, PIN_7, PIN_4, DMA, DMA, ...)` — SCK=6 / MOSI=7 / MISO=4, **no CS pin**.
+- **GPIO 5 / header pin 8 is never referenced** anywhere in the firmware. It is NOT routed as
+  the SPI0 hardware CSn, and it is not a user GPIO (those are GPIO 8-11 = pins 11-14). So the
+  flash CS **cannot** be on pin 8 with this firmware — nothing would drive it.
+- **CS is only driven by `spi_batch(cs_pin)`** (= `hal.spi_device(cs_pin)`), which asserts
+  `context.gpios[cs_pin]` — a **user GPIO 0-3 (pins 11-14)** — low around the whole op batch.
+  This is the only mechanism that holds CS across a write-then-read (which flash RDID/read
+  need). So norbert's `spi_device(cs_pin)` approach is correct; the flash CS MUST be on a user
+  GPIO (pins 11-14), driven via spi_batch. (The earlier "hardware CS on pin 8" idea is wrong.)
+- **`WrongDirection` root cause (likely):** the firmware's `gpio_put` auto-switches an
+  *unconfigured* pin to output, but returns `WrongDirection` ("pin configured in wrong
+  direction") if the pin was *explicitly* set to INPUT — e.g. by a prior `--hold-release hi-z`,
+  which does `set_config(Input)`. `hal.spi_device(cs)` inits with a bare `gpio_put(cs, High)`
+  and never sets the CS pin to output first, so once a pin has been left explicitly-input, the
+  next `spi_device` on it fails. That matches "works once, then fails on re-init."
+  - **Candidate fix in norbert:** before `spi_device(cs)`, configure the CS user-GPIO as output
+    (`hal.gpio(cs).set_config(Output, None)`), and/or power-cycle to clear latched pin state.
+    (Not yet applied — decide after the next bench test.)
+
+## Current defaults (Session 2)
+
+- `--cs` default **0** = User GPIO 0 = header **pin 11**.
+- `--hold-gpio` default **1** = User GPIO 1 = header **pin 12** (always holds now; no no-hold mode).
+- CS and hold must differ (asserted). Adjust `--cs`/`--hold-gpio` to match your actual wiring.
+- With matching wiring, the invocation simplifies to:
+  `norbert --hold-active low --hold-release hi-z --freq 1000000 info`
+- Still confirm the MOSI/MISO (io0/io1) orientation: flash IO0/SI → pin 6 (MOSI),
+  flash IO1/SO → pin 5 (MISO).
