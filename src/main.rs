@@ -27,13 +27,14 @@ struct Cli {
     /// SPI clock in Hz (USB-FS bound; 10 MHz is plenty).
     #[arg(long, global = true, default_value_t = 10_000_000)]
     freq: u32,
-    /// GPIO wired to the flash CS (SS_B).
+    /// User GPIO (0-3) wired to the flash CS (SS_B). Default: User GPIO 0 (header pin 11).
     #[arg(long, global = true, default_value_t = 0)]
     cs: u8,
-    /// GPIO to hold another bus master off the SPI while programming. Omit for a
-    /// bare chip (no hold). iCE40 CRESET example: `--hold-gpio 1 --hold-active low --hold-release hi-z`.
-    #[arg(long, global = true)]
-    hold_gpio: Option<u8>,
+    /// User GPIO (0-3) that holds another bus master (e.g. an FPGA's CRESET) off the
+    /// shared SPI while we work. Default: User GPIO 1 (header pin 12).
+    /// iCE40 example: `--hold-gpio 1 --hold-active low --hold-release hi-z`.
+    #[arg(long, global = true, default_value_t = 1)]
+    hold_gpio: u8,
     /// Level to hold the bus GPIO at.
     #[arg(long, global = true, value_enum, default_value_t = ActiveArg::Low)]
     hold_active: ActiveArg,
@@ -63,10 +64,10 @@ enum ReleaseArg {
 }
 
 impl Cli {
-    /// Build the bus-hold config from the flags (`None` = bare chip, no hold).
+    /// Build the bus-hold config from the flags (hold GPIO defaults to User GPIO 1).
     fn hold(&self) -> Option<HoldConfig> {
-        self.hold_gpio.map(|pin| HoldConfig {
-            pin,
+        Some(HoldConfig {
+            pin: self.hold_gpio,
             active: match self.hold_active {
                 ActiveArg::High => Level::High,
                 ActiveArg::Low => Level::Low,
