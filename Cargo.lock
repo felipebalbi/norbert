@@ -497,6 +497,8 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "pico-de-gallo-hal"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f35dea851102783a2bbf3abee7800ecb89d64bda68c35fb959e6ddf235712443"
 dependencies = [
  "embedded-hal",
  "embedded-hal-async",
@@ -508,7 +510,9 @@ dependencies = [
 
 [[package]]
 name = "pico-de-gallo-internal"
-version = "0.6.0"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4182bfb43393c1417841aa5e0ac6c589c5b6a5538b4944466a51e61eb5a1d4cb"
 dependencies = [
  "postcard",
  "postcard-rpc",
@@ -519,6 +523,8 @@ dependencies = [
 [[package]]
 name = "pico-de-gallo-lib"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4914d602770de9212a5f288f780ea46b37c71d1601848485fd662571f377ed0e"
 dependencies = [
  "embedded-hal",
  "nusb",
