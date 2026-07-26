@@ -6,7 +6,7 @@ mod sfdp;
 mod voice;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -37,11 +37,11 @@ struct Cli {
     #[arg(long, global = true, default_value_t = 1)]
     hold_gpio: u8,
     /// Level to hold the bus GPIO at.
-    #[arg(long, global = true, value_enum, default_value_t = ActiveArg::Low)]
-    hold_active: ActiveArg,
+    #[arg(long, global = true, value_enum, default_value_t = Level::Low)]
+    hold_active: Level,
     /// What to do with the bus GPIO on release.
-    #[arg(long, global = true, value_enum, default_value_t = ReleaseArg::HiZ)]
-    hold_release: ReleaseArg,
+    #[arg(long, global = true, value_enum, default_value_t = Release::HiZ)]
+    hold_release: Release,
     /// Machine-friendly output: drop the commentary, print IDs/addresses/OK/FAIL only.
     #[arg(long, global = true)]
     quiet: bool,
@@ -52,33 +52,14 @@ struct Cli {
     cmd: Option<Cmd>,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum ActiveArg {
-    High,
-    Low,
-}
-#[derive(Clone, Copy, ValueEnum)]
-enum ReleaseArg {
-    DriveHigh,
-    DriveLow,
-    HiZ,
-}
-
 impl Cli {
     /// Build the bus-hold config from the flags (hold GPIO defaults to User GPIO 1).
-    fn hold(&self) -> Option<HoldConfig> {
-        Some(HoldConfig {
+    fn hold(&self) -> HoldConfig {
+        HoldConfig {
             pin: self.hold_gpio,
-            active: match self.hold_active {
-                ActiveArg::High => Level::High,
-                ActiveArg::Low => Level::Low,
-            },
-            release: match self.hold_release {
-                ReleaseArg::DriveHigh => Release::DriveHigh,
-                ReleaseArg::DriveLow => Release::DriveLow,
-                ReleaseArg::HiZ => Release::HiZ,
-            },
-        })
+            active: self.hold_active,
+            release: self.hold_release,
+        }
     }
 }
 
@@ -158,14 +139,10 @@ fn build_flasher_at(
     cli: &Cli,
     freq: u32,
 ) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
-    let device::Connected { _hal, spi, bus } =
+    let device::Connected { spi, bus } =
         device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
     // Chunk to the firmware's max transfer for best throughput.
     let max_chunk = pico_de_gallo_lib::MAX_TRANSFER_SIZE.min(flash::PAGE_SIZE);
-    // `_hal` owns no runtime (we run inside norbert's #[tokio::main]); `spi`/`bus`
-    // hold Arc<Mutex<PicoDeGallo>> clones that keep the client alive, so dropping
-    // `_hal` here is safe — no Box::leak needed.
-    drop(_hal);
     Ok(Flasher::with_config(
         spi,
         bus,
