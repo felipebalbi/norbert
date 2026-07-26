@@ -1,7 +1,7 @@
 //! Pico de Gallo glue: binds the HAL's SpiDevice + GPIO to the flash core,
 //! and implements a runtime-configurable bus hold (or no hold at all).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use embedded_hal::digital::OutputPin;
 use pico_de_gallo_hal::{GpioDirection, GpioPull, Hal, SpiDev, SpiPhase, SpiPolarity};
 

@@ -45,7 +45,7 @@ pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usi
     }
     let min = profile.min_erase();
     let mut sizes = profile.erase_types.clone();
-    sizes.sort_by(|a, b| b.size.cmp(&a.size));
+    sizes.sort_by_key(|e| std::cmp::Reverse(e.size));
     let smallest = *sizes.last().unwrap();
 
     let end = offset + len;
@@ -54,7 +54,7 @@ pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usi
     while a < end {
         let choice = sizes
             .iter()
-            .find(|e| a % e.size == 0 && a + e.size <= end_aligned)
+            .find(|e| a.is_multiple_of(e.size) && a + e.size <= end_aligned)
             .copied()
             .unwrap_or(smallest);
         plan.push((a, choice.opcode));
@@ -209,7 +209,7 @@ impl Bfpt {
                 }
             }
         }
-        erase_types.sort_by(|a, c| c.size.cmp(&a.size));
+        erase_types.sort_by_key(|e| std::cmp::Reverse(e.size));
 
         let page_size = dword(b, 11)
             .map(|d11| 1usize << ((d11 >> 4) & 0xF))

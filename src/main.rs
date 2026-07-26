@@ -328,13 +328,13 @@ async fn run() -> Result<()> {
                     Err(e) => return Err(anyhow_from(e)),
                 }
                 // Oversize guard from the detected capacity.
-                if let Some(cap) = f.profile().and_then(|p| p.capacity) {
-                    if *offset + image.len() > cap {
-                        return Err(anyhow::anyhow!(
-                            "image needs {} bytes but flash is {cap} bytes",
-                            *offset + image.len()
-                        ));
-                    }
+                if let Some(cap) = f.profile().and_then(|p| p.capacity)
+                    && *offset + image.len() > cap
+                {
+                    return Err(anyhow::anyhow!(
+                        "image needs {} bytes but flash is {cap} bytes",
+                        *offset + image.len()
+                    ));
                 }
                 if *unprotect {
                     f.unprotect().await.map_err(anyhow_from)?;
@@ -532,15 +532,19 @@ async fn run() -> Result<()> {
             // 1b. Not present?
             if !id.is_present() {
                 out.emit(voice::no_flash(), Some("FAIL: no chip"));
-                println!("  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio).");
+                println!(
+                    "  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio)."
+                );
                 return Ok(());
             }
             println!("chip: {}", catalog::describe(id.jedec()));
             // 2. All three ID bytes equal → MISO/power suspicion.
             let mut warned = false;
             if id.manufacturer == id.mem_type && id.mem_type == id.capacity_code {
-                println!("WARNING: all three JEDEC bytes are 0x{:02X} — MISO may be stuck or power/wiring is wrong.",
-                    id.manufacturer);
+                println!(
+                    "WARNING: all three JEDEC bytes are 0x{:02X} — MISO may be stuck or power/wiring is wrong.",
+                    id.manufacturer
+                );
                 warned = true;
             }
             // 3. SFDP.
@@ -637,15 +641,15 @@ async fn run() -> Result<()> {
                     let sec = f.profile().map(|p| p.min_erase()).unwrap_or(4096);
                     let cap = f.profile().and_then(|p| p.capacity);
                     let base = n.saturating_mul(sec);
-                    if let Some(cap) = cap {
-                        if base.saturating_add(sec) > cap {
-                            let _ = f.release_bus();
-                            return Err(anyhow::anyhow!(
-                                "sector {n} is out of range (chip holds {} sectors of {} bytes)",
-                                cap / sec,
-                                sec
-                            ));
-                        }
+                    if let Some(cap) = cap
+                        && base.saturating_add(sec) > cap
+                    {
+                        let _ = f.release_bus();
+                        return Err(anyhow::anyhow!(
+                            "sector {n} is out of range (chip holds {} sectors of {} bytes)",
+                            cap / sec,
+                            sec
+                        ));
                     }
                     // Back up the sector before destroying it.
                     let mut backup = vec![0u8; sec];

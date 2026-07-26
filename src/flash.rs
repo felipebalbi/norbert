@@ -5,7 +5,7 @@ use embedded_hal_async::spi::{Operation, SpiDevice};
 use std::time::Duration;
 
 use crate::sfdp::{
-    lookup_fallback, plan_erase, Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader,
+    Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader, lookup_fallback, plan_erase,
 };
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
@@ -152,16 +152,23 @@ impl<S: fmt::Debug, R: fmt::Debug> fmt::Display for FlashError<S, R> {
             FlashError::Spi(e) => write!(f, "SPI error: {e:?}"),
             FlashError::Bus(e) => write!(f, "bus-hold error: {e:?}"),
             FlashError::Timeout => write!(f, "timed out waiting for flash WIP to clear"),
-            FlashError::VerifyMismatch { addr, expected, got } =>
-                write!(f, "verify mismatch @0x{addr:06X}: expected 0x{expected:02X}, got 0x{got:02X}"),
-            FlashError::TooLarge { need, have } =>
-                write!(f, "image needs {need} bytes but flash is {have} bytes"),
-            FlashError::NoFlash =>
-                write!(f, "no SPI-NOR flash detected (RDID read all 0x00/0xFF)"),
-            FlashError::UnsupportedChip { jedec } =>
-                write!(f, "unsupported flash: JEDEC {jedec:02X?} has no SFDP and no fallback-table entry (add one)"),
-            FlashError::NotDetected =>
-                write!(f, "flash geometry unknown; run `detect` first"),
+            FlashError::VerifyMismatch {
+                addr,
+                expected,
+                got,
+            } => write!(
+                f,
+                "verify mismatch @0x{addr:06X}: expected 0x{expected:02X}, got 0x{got:02X}"
+            ),
+            FlashError::TooLarge { need, have } => {
+                write!(f, "image needs {need} bytes but flash is {have} bytes")
+            }
+            FlashError::NoFlash => write!(f, "no SPI-NOR flash detected (RDID read all 0x00/0xFF)"),
+            FlashError::UnsupportedChip { jedec } => write!(
+                f,
+                "unsupported flash: JEDEC {jedec:02X?} has no SFDP and no fallback-table entry (add one)"
+            ),
+            FlashError::NotDetected => write!(f, "flash geometry unknown; run `detect` first"),
         }
     }
 }
@@ -354,11 +361,11 @@ where
         for i in 0..h.param_header_count() {
             let mut ph = [0u8; 8];
             self.read_sfdp(8 + (i as u32) * 8, &mut ph).await?;
-            if let Some(p) = ParamHeader::parse(&ph) {
-                if p.id == ParamHeader::BFPT_ID {
-                    bfpt_ph = Some(p);
-                    break;
-                }
+            if let Some(p) = ParamHeader::parse(&ph)
+                && p.id == ParamHeader::BFPT_ID
+            {
+                bfpt_ph = Some(p);
+                break;
             }
         }
         let Some(p) = bfpt_ph else {
@@ -587,6 +594,7 @@ where
     /// Full flow: acquire bus → (detect) → erase covered region → program → (verify) → release.
     /// On any error the caller should still call `release_bus` (see main.rs).
     #[allow(dead_code)] // retained + tested; CLI drives detect/erase/program/verify directly since Task 23b
+    #[allow(clippy::too_many_arguments)] // flat "run the whole flow" convenience; the CLI uses the granular methods
     pub async fn flash_bitstream(
         &mut self,
         offset: usize,
@@ -603,14 +611,14 @@ where
             self.detect_profile().await?;
         }
         let size = self.profile().and_then(|p| p.capacity).or(flash_size);
-        if let Some(sz) = size {
-            if offset + image.len() > sz {
-                let _ = self.release_bus();
-                return Err(FlashError::TooLarge {
-                    need: offset + image.len(),
-                    have: sz,
-                });
-            }
+        if let Some(sz) = size
+            && offset + image.len() > sz
+        {
+            let _ = self.release_bus();
+            return Err(FlashError::TooLarge {
+                need: offset + image.len(),
+                have: sz,
+            });
         }
         if unprotect {
             self.unprotect().await?;
