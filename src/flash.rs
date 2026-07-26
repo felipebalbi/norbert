@@ -108,17 +108,6 @@ impl BusAccess for NoHold {
     }
 }
 
-/// Progress callback events for the high-level flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // full-flow helper; retained + tested, CLI drives the steps directly since Task 23b
-pub enum Progress {
-    Detecting, // reading SFDP / choosing a flash profile (emitted once SFDP lands, Task 15)
-    Erasing,
-    Programming(usize), // bytes written so far
-    Verifying(usize),   // bytes verified so far
-    Done,
-}
-
 /// Flasher errors, generic over the SPI and bus-access error types.
 #[derive(Debug)]
 pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
@@ -129,12 +118,6 @@ pub enum FlashError<S: fmt::Debug, R: fmt::Debug> {
         addr: usize,
         expected: u8,
         got: u8,
-    },
-    #[allow(dead_code)]
-    // constructed by flash_bitstream (tested); CLI uses erase_range's own guard
-    TooLarge {
-        need: usize,
-        have: usize,
     },
     /// RDID read nothing — no chip on the bus.
     NoFlash,
@@ -160,9 +143,6 @@ impl<S: fmt::Debug, R: fmt::Debug> fmt::Display for FlashError<S, R> {
                 f,
                 "verify mismatch @0x{addr:06X}: expected 0x{expected:02X}, got 0x{got:02X}"
             ),
-            FlashError::TooLarge { need, have } => {
-                write!(f, "image needs {need} bytes but flash is {have} bytes")
-            }
             FlashError::NoFlash => write!(f, "no SPI-NOR flash detected (RDID read all 0x00/0xFF)"),
             FlashError::UnsupportedChip { jedec } => write!(
                 f,
@@ -590,53 +570,6 @@ where
     pub fn release_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.reset.release().map_err(Self::bus_err)
     }
-
-    /// Full flow: acquire bus → (detect) → erase covered region → program → (verify) → release.
-    /// On any error the caller should still call `release_bus` (see main.rs).
-    #[allow(dead_code)] // retained + tested; CLI drives detect/erase/program/verify directly since Task 23b
-    #[allow(clippy::too_many_arguments)] // flat "run the whole flow" convenience; the CLI uses the granular methods
-    pub async fn flash_bitstream(
-        &mut self,
-        offset: usize,
-        image: &[u8],
-        detect: bool,
-        unprotect: bool,
-        verify: bool,
-        flash_size: Option<usize>,
-        mut progress: impl FnMut(Progress),
-    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        self.acquire_bus().await?;
-        if detect {
-            progress(Progress::Detecting);
-            self.detect_profile().await?;
-        }
-        let size = self.profile().and_then(|p| p.capacity).or(flash_size);
-        if let Some(sz) = size
-            && offset + image.len() > sz
-        {
-            let _ = self.release_bus();
-            return Err(FlashError::TooLarge {
-                need: offset + image.len(),
-                have: sz,
-            });
-        }
-        if unprotect {
-            self.unprotect().await?;
-        }
-        progress(Progress::Erasing);
-        self.erase_range(offset, image.len()).await?;
-        progress(Progress::Programming(0));
-        self.program(offset, image, |w| progress(Progress::Programming(w)))
-            .await?;
-        if verify {
-            progress(Progress::Verifying(0));
-            self.verify(offset, image, |v| progress(Progress::Verifying(v)))
-                .await?;
-        }
-        self.release_bus()?;
-        progress(Progress::Done);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -769,53 +702,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flash_bitstream_end_to_end() {
-        let flash = FakeFlash::new(2 * 1024 * 1024, [0x1C, 0x70, 0x15]);
-        let probe = flash.clone();
-        let reset = FakeBus::new();
-        let reset_probe = reset.clone();
-        let mut f = flasher(flash, reset, 64);
-
-        let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        let mut events = Vec::new();
-        f.flash_bitstream(0, &image, false, false, true, Some(2 * 1024 * 1024), |p| {
-            events.push(p)
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(&probe.mem()[..1000], &image[..]);
-        assert!(
-            !reset_probe.asserted(),
-            "CRESET must be released at the end"
-        );
-        assert_eq!(events.first(), Some(&Progress::Erasing));
-        assert_eq!(events.last(), Some(&Progress::Done));
-    }
-
-    #[tokio::test]
-    async fn flash_bitstream_rejects_oversize() {
-        let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
-        let mut f = flasher(flash, FakeBus::new(), 64);
-        f.set_profile(crate::profile::FlashProfile {
-            page_size: 256,
-            address_bytes: 3,
-            capacity: Some(1024),
-            erase_types: vec![crate::profile::EraseType {
-                size: 64 * 1024,
-                opcode: 0xD8,
-            }],
-            source: crate::profile::ProfileSource::Table,
-        });
-        let image = vec![0u8; 2048];
-        assert!(matches!(
-            f.flash_bitstream(0, &image, false, false, false, None, |_| {})
-                .await,
-            Err(FlashError::TooLarge { .. })
-        ));
-    }
-
-    #[tokio::test]
     async fn erase_uses_profile_small_sector_at_tail() {
         use crate::profile::{EraseType, FlashProfile, ProfileSource};
         let size = 256 * 1024;
@@ -936,25 +822,6 @@ mod tests {
         let flash = FakeFlash::new(1024, [0xFF, 0xFF, 0xFF]);
         let mut f = flasher(flash, FakeBus::new(), 256);
         assert!(matches!(f.detect_profile().await, Err(FlashError::NoFlash)));
-    }
-
-    #[tokio::test]
-    async fn flash_bitstream_detects_first() {
-        let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x15]);
-        flash.set_sfdp(&sfdp_blob());
-        let probe = flash.clone();
-        let mut f = flasher(flash, FakeBus::new(), 256);
-        let image: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        let mut events = Vec::new();
-        f.flash_bitstream(0, &image, true, false, true, None, |p| events.push(p))
-            .await
-            .unwrap();
-        assert_eq!(events.first(), Some(&Progress::Detecting));
-        assert_eq!(&probe.mem()[..1000], &image[..]);
-        assert_eq!(
-            f.profile().unwrap().source,
-            crate::profile::ProfileSource::Sfdp
-        );
     }
 
     #[tokio::test]
@@ -1230,9 +1097,6 @@ mod tests {
     impl FakeBus {
         fn new() -> Self {
             FakeBus(Rc::new(RefCell::new(false)))
-        }
-        fn asserted(&self) -> bool {
-            *self.0.borrow()
         }
     }
     impl BusAccess for FakeBus {
