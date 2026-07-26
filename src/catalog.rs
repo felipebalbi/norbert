@@ -1,6 +1,6 @@
-//! Human names for flash chips — "Norbert's book". Pure tables; extend freely.
+//! "Norbert's book": human names for flash chips + the no-SFDP fallback table. Pure tables; extend freely.
 
-use crate::profile::{EraseType, FlashProfile, ProfileSource};
+use crate::profile::{AddressWidth, EraseMenu, EraseType, FlashProfile, ProfileSource};
 
 /// JEDEC manufacturer ID → name (JEP106, common subset).
 pub fn manufacturer(id: u8) -> Option<&'static str> {
@@ -104,26 +104,32 @@ pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
         .find(|c| c.jedec == jedec)
         .map(|c| FlashProfile {
             page_size: c.page_size,
-            address_bytes: c.address_bytes,
+            address_width: if c.address_bytes == 4 {
+                AddressWidth::Four
+            } else {
+                AddressWidth::Three
+            },
             capacity: Some(c.capacity),
-            erase_types: c.erase_types.to_vec(),
+            erase: EraseMenu::new(c.erase_types.to_vec())
+                .expect("fallback-table entries have a non-empty erase menu"),
             source: ProfileSource::Table,
+            sfdp_revision: None,
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{EraseType, ProfileSource};
+    use crate::profile::{AddressWidth, EraseType, ProfileSource};
 
     #[test]
     fn m25p16_is_in_the_fallback_table() {
         let p = lookup_fallback([0x20, 0x20, 0x15]).expect("M25P16 is a known chip");
         assert_eq!(p.source, ProfileSource::Table);
-        assert_eq!(p.address_bytes, 3);
+        assert_eq!(p.address_width, AddressWidth::Three);
         assert_eq!(p.capacity, Some(2 * 1024 * 1024));
         assert_eq!(
-            p.erase_types,
+            p.erase.iter().collect::<Vec<_>>(),
             vec![EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8

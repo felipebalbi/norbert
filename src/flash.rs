@@ -5,7 +5,7 @@ use embedded_hal_async::spi::{Operation, SpiDevice};
 use std::time::Duration;
 
 use crate::catalog::lookup_fallback;
-use crate::profile::{FlashProfile, ProfileSource, plan_erase};
+use crate::profile::{AddressWidth, EraseMenu, FlashProfile, ProfileSource, plan_erase};
 use crate::sfdp::{Bfpt, ParamHeader, SfdpHeader};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
@@ -25,9 +25,9 @@ const SR_WIP: u8 = 0x01;
 const SR_BP_MASK: u8 = 0x1C; // BP0..BP2 (typical)
 
 /// Append `opcode` + a 3- or 4-byte big-endian address.
-fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, addr_bytes: u8) {
+fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, width: AddressWidth) {
     cmd.push(opcode);
-    if addr_bytes == 4 {
+    if width.is_four_byte() {
         cmd.push((addr >> 24) as u8);
     }
     cmd.push((addr >> 16) as u8);
@@ -291,7 +291,7 @@ where
         &mut self,
         profile: FlashProfile,
     ) -> Result<FlashProfile, FlashError<SPI::Error, RST::Error>> {
-        if profile.address_bytes == 4 {
+        if profile.address_width.is_four_byte() {
             self.enter_4byte().await?;
         }
         self.set_profile(profile.clone());
@@ -327,15 +327,16 @@ where
         let mut bytes = vec![0u8; p.length_dwords as usize * 4];
         self.read_sfdp(p.table_pointer, &mut bytes).await?;
         let bfpt = Bfpt::parse(&bytes);
-        if bfpt.erase_types.is_empty() {
-            return Ok(None); // SFDP present but unusable → fall through to the table
-        }
+        let Some(erase) = EraseMenu::new(bfpt.erase_types) else {
+            return Ok(None); // SFDP present but no usable erase menu → fall through to the table
+        };
         Ok(Some(FlashProfile {
             page_size: bfpt.page_size,
-            address_bytes: bfpt.address_bytes,
+            address_width: bfpt.address_width,
             capacity: bfpt.capacity.or(id.capacity_bytes()),
-            erase_types: bfpt.erase_types,
+            erase,
             source: ProfileSource::Sfdp,
+            sfdp_revision: Some((h.major, h.minor)),
         }))
     }
 
@@ -345,10 +346,10 @@ where
         addr: u32,
         opcode: u8,
     ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        let ab = self.require_profile()?.address_bytes;
+        let width = self.require_profile()?.address_width;
         self.write_enable().await?;
-        let mut header = Vec::with_capacity(1 + ab as usize);
-        push_cmd_addr(&mut header, opcode, addr, ab);
+        let mut header = Vec::with_capacity(1 + width.bytes() as usize);
+        push_cmd_addr(&mut header, opcode, addr, width);
         self.spi
             .transaction(&mut [Operation::Write(&header)])
             .await
@@ -422,10 +423,10 @@ where
         addr: u32,
         data: &[u8],
     ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        let ab = self.require_profile()?.address_bytes;
+        let width = self.require_profile()?.address_width;
         self.write_enable().await?;
-        let mut header = Vec::with_capacity(1 + ab as usize);
-        push_cmd_addr(&mut header, CMD_PP, addr, ab);
+        let mut header = Vec::with_capacity(1 + width.bytes() as usize);
+        push_cmd_addr(&mut header, CMD_PP, addr, width);
         let mut ops: Vec<Operation<'_, u8>> =
             Vec::with_capacity(1 + data.len() / self.max_chunk + 1);
         ops.push(Operation::Write(&header));
@@ -467,11 +468,11 @@ where
         offset: usize,
         buf: &mut [u8],
     ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        let ab = self.require_profile()?.address_bytes;
+        let width = self.require_profile()?.address_width;
         let mut done = 0;
         while done < buf.len() {
-            let mut header = Vec::with_capacity(1 + ab as usize);
-            push_cmd_addr(&mut header, CMD_READ, (offset + done) as u32, ab);
+            let mut header = Vec::with_capacity(1 + width.bytes() as usize);
+            push_cmd_addr(&mut header, CMD_READ, (offset + done) as u32, width);
             let n = self.max_chunk.min(buf.len() - done);
             self.spi
                 .transaction(&mut [
@@ -678,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn erase_uses_profile_small_sector_at_tail() {
-        use crate::profile::{EraseType, FlashProfile, ProfileSource};
+        use crate::profile::{AddressWidth, EraseMenu, EraseType, FlashProfile, ProfileSource};
         let size = 256 * 1024;
         let flash = FakeFlash::new(size, [0xEF, 0x40, 0x15]);
         for i in 0..size {
@@ -688,9 +689,9 @@ mod tests {
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.set_profile(FlashProfile {
             page_size: 256,
-            address_bytes: 3,
+            address_width: AddressWidth::Three,
             capacity: Some(size),
-            erase_types: vec![
+            erase: EraseMenu::new(vec![
                 EraseType {
                     size: 64 * 1024,
                     opcode: 0xD8,
@@ -699,8 +700,10 @@ mod tests {
                     size: 4 * 1024,
                     opcode: 0x20,
                 },
-            ],
+            ])
+            .unwrap(),
             source: ProfileSource::Sfdp,
+            sfdp_revision: None,
         });
         f.erase_range(0, 131_072 + 100).await.unwrap();
         let mem = probe.mem();
@@ -759,8 +762,9 @@ mod tests {
         assert_eq!(p.source, ProfileSource::Sfdp);
         assert_eq!(p.page_size, 256);
         assert_eq!(p.capacity, Some(2 * 1024 * 1024));
-        assert_eq!(p.erase_types.len(), 3);
-        assert_eq!(p.erase_types[0].size, 64 * 1024); // largest first
+        assert_eq!(p.erase.iter().count(), 3);
+        assert_eq!(p.erase.largest().size, 64 * 1024); // largest first
+        assert_eq!(p.sfdp_revision, Some((1, 6))); // "SFDP" rev 1.6 from the header
     }
 
     #[tokio::test]
@@ -772,7 +776,7 @@ mod tests {
         assert_eq!(p.source, ProfileSource::Table);
         assert_eq!(p.capacity, Some(2 * 1024 * 1024));
         assert_eq!(
-            p.erase_types,
+            p.erase.iter().collect::<Vec<_>>(),
             vec![EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8
@@ -801,19 +805,21 @@ mod tests {
 
     #[tokio::test]
     async fn four_byte_addressing_roundtrips() {
-        use crate::profile::{EraseType, FlashProfile, ProfileSource};
+        use crate::profile::{AddressWidth, EraseMenu, EraseType, FlashProfile, ProfileSource};
         let flash = FakeFlash::new(1024 * 1024, [0xEF, 0x40, 0x19]); // pretend 256 Mbit part
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
         f.set_profile(FlashProfile {
             page_size: 256,
-            address_bytes: 4,
+            address_width: AddressWidth::Four,
             capacity: Some(32 * 1024 * 1024),
-            erase_types: vec![EraseType {
+            erase: EraseMenu::new(vec![EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8,
-            }],
+            }])
+            .unwrap(),
             source: ProfileSource::Sfdp,
+            sfdp_revision: None,
         });
         f.enter_4byte().await.unwrap(); // put the fake into 4-byte mode
         let addr = 0x0002_0000; // emitted as 4 bytes because the profile says so
@@ -1098,13 +1104,15 @@ mod tests {
         );
         f.set_profile(crate::profile::FlashProfile {
             page_size: 256,
-            address_bytes: 3,
+            address_width: crate::profile::AddressWidth::Three,
             capacity: Some(2 * 1024 * 1024),
-            erase_types: vec![crate::profile::EraseType {
+            erase: crate::profile::EraseMenu::new(vec![crate::profile::EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8,
-            }],
+            }])
+            .unwrap(),
             source: crate::profile::ProfileSource::Table,
+            sfdp_revision: None,
         });
         f
     }

@@ -1,16 +1,14 @@
 //! SFDP byte parsing: header, parameter headers, and the Basic Flash Parameter Table.
 
-use crate::profile::EraseType;
+use crate::profile::{AddressWidth, EraseType};
 
 pub const SFDP_SIGNATURE: [u8; 4] = *b"SFDP";
 
-/// 8-byte SFDP header. `major`/`minor` (the SFDP revision) are decoded but not
-/// yet read; only `nph` drives detection today.
+/// 8-byte SFDP header. `major`/`minor` carry the SFDP revision (surfaced on the
+/// resulting `FlashProfile`); `nph` drives parameter-header discovery.
 #[derive(Debug, Clone, Copy)]
 pub struct SfdpHeader {
-    #[allow(dead_code)]
     pub major: u8,
-    #[allow(dead_code)]
     pub minor: u8,
     pub nph: u8,
 }
@@ -57,7 +55,7 @@ impl ParamHeader {
 /// Fields decoded from the JEDEC Basic Flash Parameter Table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bfpt {
-    pub address_bytes: u8,
+    pub address_width: AddressWidth,
     pub page_size: usize,
     pub capacity: Option<usize>,
     pub erase_types: Vec<EraseType>,
@@ -73,7 +71,11 @@ impl Bfpt {
     /// Defensive: missing dwords fall back to sane defaults.
     pub fn parse(b: &[u8]) -> Bfpt {
         let d1 = dword(b, 1).unwrap_or(0);
-        let address_bytes = if (d1 >> 17) & 0b11 == 2 { 4 } else { 3 };
+        let address_width = if (d1 >> 17) & 0b11 == 2 {
+            AddressWidth::Four
+        } else {
+            AddressWidth::Three
+        };
 
         let capacity = dword(b, 2).and_then(|d2| {
             if d2 & 0x8000_0000 == 0 {
@@ -114,7 +116,7 @@ impl Bfpt {
             .unwrap_or(256);
 
         Bfpt {
-            address_bytes,
+            address_width,
             page_size,
             capacity,
             erase_types,
@@ -125,6 +127,7 @@ impl Bfpt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::AddressWidth;
 
     // Synthetic but spec-correct BFPT: 3-byte addr, 2 MiB, page 256,
     // erase 4K/0x20, 32K/0x52, 64K/0xD8.
@@ -141,7 +144,7 @@ mod tests {
     #[test]
     fn bfpt_decodes_geometry_and_erase_menu() {
         let bfpt = Bfpt::parse(&sample_bfpt());
-        assert_eq!(bfpt.address_bytes, 3);
+        assert_eq!(bfpt.address_width, AddressWidth::Three);
         assert_eq!(bfpt.page_size, 256);
         assert_eq!(bfpt.capacity, Some(2 * 1024 * 1024));
         assert_eq!(

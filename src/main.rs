@@ -713,13 +713,13 @@ fn norbert_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> 
 fn print_profile(p: &profile::FlashProfile) {
     println!("source:   {:?}", p.source);
     println!("page:     {} B", p.page_size);
-    println!("address:  {}-byte", p.address_bytes);
+    println!("address:  {}", p.address_width);
     match p.capacity {
         Some(c) => println!("capacity: {} KiB", c / 1024),
         None => println!("capacity: unknown"),
     }
     println!("erase types:");
-    for e in &p.erase_types {
+    for e in p.erase.iter() {
         println!("  {:>7} B  op 0x{:02X}", e.size, e.opcode);
     }
 }

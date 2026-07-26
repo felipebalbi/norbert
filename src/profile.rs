@@ -1,10 +1,72 @@
 //! Flash geometry model + the pure erase planner. No I/O, no SFDP bytes.
 
+use core::fmt;
+
+/// Number of address bytes a part expects in read/erase/program headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressWidth {
+    Three,
+    Four,
+}
+
+impl AddressWidth {
+    /// Header address length in bytes.
+    pub fn bytes(self) -> u8 {
+        match self {
+            AddressWidth::Three => 3,
+            AddressWidth::Four => 4,
+        }
+    }
+    pub fn is_four_byte(self) -> bool {
+        matches!(self, AddressWidth::Four)
+    }
+}
+
+impl fmt::Display for AddressWidth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-byte", self.bytes())
+    }
+}
+
 /// One supported erase granularity: `size` bytes via `opcode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EraseType {
     pub size: usize,
     pub opcode: u8,
+}
+
+/// A non-empty erase menu, sorted largest-size first, with unique sizes.
+///
+/// The invariant is upheld by `new`, so `largest`/`smallest` are total and the
+/// planner never has to guess a fallback granularity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EraseMenu(Vec<EraseType>);
+
+impl EraseMenu {
+    /// Build a menu, sorting largest-first and dropping duplicate sizes.
+    /// `None` for empty input — a chip with no usable menu is rejected at
+    /// detection, so a `FlashProfile` always holds a real menu.
+    pub fn new(mut types: Vec<EraseType>) -> Option<Self> {
+        if types.is_empty() {
+            return None;
+        }
+        types.sort_by_key(|e| std::cmp::Reverse(e.size));
+        types.dedup_by_key(|e| e.size);
+        Some(EraseMenu(types))
+    }
+
+    /// Largest granularity (first, by the sort invariant).
+    #[allow(dead_code)] // API pair of smallest(); exercised in tests, not yet read by the binary
+    pub fn largest(&self) -> EraseType {
+        self.0[0]
+    }
+    /// Smallest granularity (last, by the sort invariant).
+    pub fn smallest(&self) -> EraseType {
+        self.0[self.0.len() - 1]
+    }
+    pub fn iter(&self) -> impl Iterator<Item = EraseType> + '_ {
+        self.0.iter().copied()
+    }
 }
 
 /// How a `FlashProfile` was resolved.
@@ -18,19 +80,16 @@ pub enum ProfileSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlashProfile {
     pub page_size: usize,
-    pub address_bytes: u8,           // 3 or 4
-    pub capacity: Option<usize>,     // bytes, if known
-    pub erase_types: Vec<EraseType>, // sorted largest-first
+    pub address_width: AddressWidth,
+    pub capacity: Option<usize>, // bytes, if known
+    pub erase: EraseMenu,
     pub source: ProfileSource,
+    pub sfdp_revision: Option<(u8, u8)>, // (major, minor) when source == Sfdp
 }
 
 impl FlashProfile {
     pub fn min_erase(&self) -> usize {
-        self.erase_types
-            .iter()
-            .map(|e| e.size)
-            .min()
-            .unwrap_or(64 * 1024)
+        self.erase.smallest().size
     }
 }
 
@@ -39,22 +98,20 @@ impl FlashProfile {
 /// (rounded up to the smallest granularity), else the smallest. `(addr, opcode)`.
 pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usize, u8)> {
     let mut plan = Vec::new();
-    if len == 0 || profile.erase_types.is_empty() {
+    if len == 0 {
         return plan;
     }
     let min = profile.min_erase();
-    let mut sizes = profile.erase_types.clone();
-    sizes.sort_by_key(|e| std::cmp::Reverse(e.size));
-    let smallest = *sizes.last().unwrap();
+    let smallest = profile.erase.smallest();
 
     let end = offset + len;
     let end_aligned = end.div_ceil(min) * min;
     let mut a = offset - offset % min;
     while a < end {
-        let choice = sizes
+        let choice = profile
+            .erase
             .iter()
             .find(|e| a.is_multiple_of(e.size) && a + e.size <= end_aligned)
-            .copied()
             .unwrap_or(smallest);
         plan.push((a, choice.opcode));
         a += choice.size;
@@ -69,17 +126,57 @@ mod tests {
     fn profile_with(sizes: &[(usize, u8)]) -> FlashProfile {
         FlashProfile {
             page_size: 256,
-            address_bytes: 3,
+            address_width: AddressWidth::Three,
             capacity: Some(2 * 1024 * 1024),
-            erase_types: sizes
-                .iter()
-                .map(|(s, o)| EraseType {
-                    size: *s,
-                    opcode: *o,
-                })
-                .collect(),
+            erase: EraseMenu::new(
+                sizes
+                    .iter()
+                    .map(|(s, o)| EraseType {
+                        size: *s,
+                        opcode: *o,
+                    })
+                    .collect(),
+            )
+            .expect("test menu is non-empty"),
             source: ProfileSource::Sfdp,
+            sfdp_revision: None,
         }
+    }
+
+    #[test]
+    fn address_width_bytes_and_display() {
+        assert_eq!(AddressWidth::Three.bytes(), 3);
+        assert_eq!(AddressWidth::Four.bytes(), 4);
+        assert!(AddressWidth::Four.is_four_byte());
+        assert!(!AddressWidth::Three.is_four_byte());
+        assert_eq!(AddressWidth::Three.to_string(), "3-byte");
+    }
+
+    #[test]
+    fn erase_menu_rejects_empty() {
+        assert!(EraseMenu::new(vec![]).is_none());
+    }
+
+    #[test]
+    fn erase_menu_sorts_desc_and_dedups() {
+        let m = EraseMenu::new(vec![
+            EraseType {
+                size: 4096,
+                opcode: 0x20,
+            },
+            EraseType {
+                size: 65536,
+                opcode: 0xD8,
+            },
+            EraseType {
+                size: 4096,
+                opcode: 0x20,
+            },
+        ])
+        .unwrap();
+        assert_eq!(m.largest().size, 65536);
+        assert_eq!(m.smallest().size, 4096);
+        assert_eq!(m.iter().count(), 2); // duplicate 4096 dropped
     }
 
     #[test]
