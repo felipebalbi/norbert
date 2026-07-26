@@ -225,3 +225,34 @@ After switching to path deps, `info` regressed to `FF FF FF` ("no flash"). Prove
 - A host **panic mid-`program`** (the old `SerializeBufferFull`) can leave a Pico GPIO wedged
   until power-cycle; the buffer fix removes that panic, and program's error path releases the bus
   on a normal `Err`, so failures no longer wedge a pin.
+
+---
+
+## Session 5 — native async conversion validated on hardware
+
+**IT WORKS (async).** norbert was converted from blocking `embedded-hal` to native
+`embedded-hal-async` on a single tokio runtime, and the operator validated it on the iCEbreaker
+(holding CRESET): `info` returns the chip on the new runtime, `program` runs the full
+erase→program→verify with live progress and boots, and Ctrl-C mid-`program` prints
+`Stopped. I've let go of the bus.` (exit 130) with the bus released. All green.
+
+### What changed (7 commits on `main`, `d4839c9`..`ccc5c5a`)
+- `flash.rs` flasher core + 34 tests → `embedded_hal_async::spi::SpiDevice`; `wait_ready` uses
+  `tokio::time::timeout` + `tokio::time::sleep`; `wake` uses `tokio::time::sleep`. The bus-hold
+  side (`BusAccess`/`HostBus`/`release_bus`) stays **sync** on purpose (no async GPIO output in the HAL).
+- `main` is `#[tokio::main(flavor = "multi_thread")]`; `run()` is async; all handlers `.await`.
+- **`Box::leak` dropped.** Created inside norbert's runtime, the `Hal` owns no `Runtime`, and
+  `SpiDev`/`Gpio` each hold an `Arc<Mutex<PicoDeGallo>>` clone that keeps the USB client alive, so
+  `build_flasher` just `drop(_hal)`s.
+- Ctrl-C cancellation via a `with_cancel` helper: acquire → race op vs `tokio::signal::ctrl_c()` →
+  **always** `release_bus()` → exit 130 (routed through `Out` so `--quiet`/non-TTY prints `FAIL: cancelled`).
+- `indicatif` progress: erase spinner + program/verify byte bars (hidden under `--quiet`; on stderr
+  so stdout machine output stays clean).
+- Edition **2024**; `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt --check` clean; 34 tests pass.
+
+### Key requirement / gotcha
+- **The runtime MUST be `multi_thread`.** The HAL bridges its blocking GPIO/SPI-config calls via
+  `tokio::task::block_in_place`, which panics on a current-thread runtime.
+- **Prerequisite:** `pico-de-gallo-hal 0.6.1` — a `block_in_place` guard on `Hal::spi_device`
+  (it previously did a raw `handle.block_on` and panicked when called from inside a tokio runtime).
+  Released to crates.io; norbert depends on `hal = "0.6"` and resolves it.
