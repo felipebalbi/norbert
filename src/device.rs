@@ -51,6 +51,7 @@ impl BusAccess for HostBus {
 
     fn release(&mut self) -> Result<(), Self::Error> {
         match self.release {
+            // Hi-Z: let the board's pull-up/down take the line (e.g. iCE40 CRESET).
             Release::HiZ => self.gpio.set_config(GpioDirection::Input, GpioPull::None),
             Release::DriveHigh => {
                 self.gpio
@@ -90,6 +91,7 @@ pub fn connect(
 
     let _ = hal.system_reset_subscriptions();
 
+    // SPI mode 0 (CPOL=0, CPHA=0): IdleLow + CaptureOnFirstTransition.
     hal.spi_set_config(
         freq_hz,
         SpiPhase::CaptureOnFirstTransition,
