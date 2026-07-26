@@ -37,9 +37,6 @@ fn push_cmd_addr(cmd: &mut Vec<u8>, opcode: u8, addr: u32, addr_bytes: u8) {
 
 /// 256-byte program page.
 pub const PAGE_SIZE: usize = 256;
-/// 64 KiB erase block.
-#[allow(dead_code)] // reference constant; used by tests (erase geometry now comes from FlashProfile)
-pub const BLOCK_SIZE: usize = 64 * 1024;
 
 /// JEDEC RDID (0x9F) response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,26 +83,13 @@ impl fmt::Display for FlashId {
 /// Holds another bus master off the shared SPI while we program, then releases it.
 ///
 /// `acquire` must make the flash's SPI bus exclusively ours; `release` returns
-/// control. For a bare chip / clip this is a no-op (`NoHold`). For a shared bus
+/// control. For a bare chip / clip this is a no-op. For a shared bus
 /// it is a GPIO held at a level (the device layer's `HostBus`) — e.g. the iCE40 CRESET driven low
 /// to tri-state the FPGA's SPI pins, then released Hi-Z so it reconfigures.
 pub trait BusAccess {
     type Error: fmt::Debug;
     fn acquire(&mut self) -> Result<(), Self::Error>;
     fn release(&mut self) -> Result<(), Self::Error>;
-}
-
-/// No-op bus access for a bare flash (nothing else on the SPI bus). Default.
-#[allow(dead_code)] // library convenience (CLI always wires HostBus)
-pub struct NoHold;
-impl BusAccess for NoHold {
-    type Error = core::convert::Infallible;
-    fn acquire(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-    fn release(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
 }
 
 /// Flasher errors, generic over the SPI and bus-access error types.
@@ -169,18 +153,6 @@ where
     SPI: SpiDevice,
     RST: BusAccess,
 {
-    /// Sensible defaults: 256-byte SPI chunks, 2 ms poll interval, 60 s timeout.
-    #[allow(dead_code)] // library convenience (CLI uses with_config)
-    pub fn new(spi: SPI, reset: RST) -> Self {
-        Self::with_config(
-            spi,
-            reset,
-            PAGE_SIZE,
-            Duration::from_millis(2),
-            Duration::from_secs(60),
-        )
-    }
-
     /// `max_chunk` bounds bytes per USB SPI op; all writes/reads are split to it
     /// *within* a single CS transaction, so any value >= 4 is correct.
     pub fn with_config(
@@ -580,6 +552,9 @@ mod tests {
     use std::cell::RefCell;
     use std::convert::Infallible;
     use std::rc::Rc;
+
+    /// 64 KiB erase block (test reference constant; production geometry comes from FlashProfile).
+    const BLOCK_SIZE: usize = 64 * 1024;
 
     #[test]
     fn capacity_decode() {
