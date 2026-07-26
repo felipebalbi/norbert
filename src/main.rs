@@ -174,6 +174,22 @@ fn build_flasher_at(
     ))
 }
 
+/// A determinate byte bar (or a hidden bar in --quiet / non-TTY).
+fn byte_bar(len: u64, quiet: bool) -> indicatif::ProgressBar {
+    if quiet {
+        return indicatif::ProgressBar::hidden();
+    }
+    let pb = indicatif::ProgressBar::new(len);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "{msg:>9} [{bar:32}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+        )
+        .unwrap()
+        .progress_chars("=> "),
+    );
+    pb
+}
+
 // multi_thread is REQUIRED: the HAL bridges its blocking GPIO/SPI-config calls
 // via tokio::task::block_in_place, which panics on a current-thread runtime.
 #[tokio::main(flavor = "multi_thread")]
@@ -324,6 +340,14 @@ async fn run() -> Result<()> {
                     f.unprotect().await.map_err(anyhow_from)?;
                 }
                 out.emit(voice::programming(), None);
+
+                let erase = if cli.quiet {
+                    indicatif::ProgressBar::hidden()
+                } else {
+                    indicatif::ProgressBar::new_spinner()
+                };
+                erase.set_message("erasing");
+                erase.enable_steady_tick(std::time::Duration::from_millis(100));
                 if *chip_erase {
                     f.chip_erase().await.map_err(anyhow_from)?;
                 } else {
@@ -331,13 +355,22 @@ async fn run() -> Result<()> {
                         .await
                         .map_err(anyhow_from)?;
                 }
-                f.program(*offset, &image, |_| {})
+                erase.finish_and_clear();
+
+                let pb = byte_bar(image.len() as u64, cli.quiet);
+                pb.set_message("program");
+                f.program(*offset, &image, |w| pb.set_position(w as u64))
                     .await
                     .map_err(anyhow_from)?;
+                pb.finish_and_clear();
+
                 if !*no_verify {
-                    f.verify(*offset, &image, |_| {})
+                    let vb = byte_bar(image.len() as u64, cli.quiet);
+                    vb.set_message("verify");
+                    f.verify(*offset, &image, |d| vb.set_position(d as u64))
                         .await
                         .map_err(norbert_from)?;
+                    vb.finish_and_clear();
                 }
                 Ok(())
             })
