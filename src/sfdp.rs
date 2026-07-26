@@ -1,48 +1,6 @@
 //! SFDP byte parsing: header, parameter headers, and the Basic Flash Parameter Table.
 
-use crate::profile::{EraseType, FlashProfile, ProfileSource};
-
-/// A known SPI-NOR part that lacks SFDP, described from its datasheet.
-pub struct KnownChip {
-    pub jedec: [u8; 3],
-    #[allow(dead_code)] // reserved for detect logging; not read yet
-    pub name: &'static str,
-    pub page_size: usize,
-    pub address_bytes: u8,
-    pub capacity: usize,
-    pub erase_types: &'static [EraseType],
-}
-
-/// Fallback table — parts we support that don't self-describe via SFDP.
-/// Add a row (datasheet values) to support a new no-SFDP chip.
-pub static FALLBACK_TABLE: &[KnownChip] = &[
-    KnownChip {
-        jedec: [0x20, 0x20, 0x15],
-        name: "Micron/Numonyx M25P16",
-        page_size: 256,
-        address_bytes: 3,
-        capacity: 2 * 1024 * 1024,
-        erase_types: &[EraseType {
-            size: 64 * 1024,
-            opcode: 0xD8,
-        }],
-    },
-    // add more no-SFDP parts here…
-];
-
-/// Build a `FlashProfile` for a chip in the fallback table, else `None`.
-pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
-    FALLBACK_TABLE
-        .iter()
-        .find(|c| c.jedec == jedec)
-        .map(|c| FlashProfile {
-            page_size: c.page_size,
-            address_bytes: c.address_bytes,
-            capacity: Some(c.capacity),
-            erase_types: c.erase_types.to_vec(),
-            source: ProfileSource::Table,
-        })
-}
+use crate::profile::EraseType;
 
 pub const SFDP_SIGNATURE: [u8; 4] = *b"SFDP";
 
@@ -167,22 +125,6 @@ impl Bfpt {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn m25p16_is_in_the_fallback_table() {
-        let p = lookup_fallback([0x20, 0x20, 0x15]).expect("M25P16 is a known chip");
-        assert_eq!(p.source, ProfileSource::Table);
-        assert_eq!(p.address_bytes, 3);
-        assert_eq!(p.capacity, Some(2 * 1024 * 1024));
-        assert_eq!(
-            p.erase_types,
-            vec![EraseType {
-                size: 64 * 1024,
-                opcode: 0xD8
-            }]
-        );
-        assert!(lookup_fallback([0xAB, 0xCD, 0xEF]).is_none()); // unknown → not supported
-    }
 
     // Synthetic but spec-correct BFPT: 3-byte addr, 2 MiB, page 256,
     // erase 4K/0x20, 32K/0x52, 64K/0xD8.

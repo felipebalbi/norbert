@@ -440,7 +440,7 @@ async fn run() -> Result<()> {
             out.emit(voice::erased(), Some("OK"));
         }
         Cmd::List => {
-            for c in sfdp::FALLBACK_TABLE {
+            for c in catalog::FALLBACK_TABLE {
                 println!(
                     "{:02X} {:02X} {:02X}  {}",
                     c.jedec[0],

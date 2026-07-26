@@ -4,8 +4,8 @@ use core::fmt;
 use embedded_hal_async::spi::{Operation, SpiDevice};
 use std::time::Duration;
 
+use crate::catalog::lookup_fallback;
 use crate::profile::{FlashProfile, ProfileSource, plan_erase};
-use crate::sfdp::lookup_fallback;
 use crate::sfdp::{Bfpt, ParamHeader, SfdpHeader};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
@@ -452,7 +452,7 @@ where
     }
 
     /// Erase every block overlapping `[offset, offset+len)`, choosing erase
-    /// granularities from the detected profile (`sfdp::plan_erase`).
+    /// granularities from the detected profile (`profile::plan_erase`).
     pub async fn erase_range(
         &mut self,
         offset: usize,
