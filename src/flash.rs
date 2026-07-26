@@ -4,9 +4,9 @@ use core::fmt;
 use embedded_hal_async::spi::{Operation, SpiDevice};
 use std::time::Duration;
 
-use crate::sfdp::{
-    Bfpt, FlashProfile, ParamHeader, ProfileSource, SfdpHeader, lookup_fallback, plan_erase,
-};
+use crate::profile::{FlashProfile, ProfileSource, plan_erase};
+use crate::sfdp::lookup_fallback;
+use crate::sfdp::{Bfpt, ParamHeader, SfdpHeader};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
 const CMD_RDID: u8 = 0x9F;
@@ -797,15 +797,15 @@ mod tests {
     async fn flash_bitstream_rejects_oversize() {
         let flash = FakeFlash::new(1024, [0x20, 0x20, 0x15]);
         let mut f = flasher(flash, FakeBus::new(), 64);
-        f.set_profile(crate::sfdp::FlashProfile {
+        f.set_profile(crate::profile::FlashProfile {
             page_size: 256,
             address_bytes: 3,
             capacity: Some(1024),
-            erase_types: vec![crate::sfdp::EraseType {
+            erase_types: vec![crate::profile::EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8,
             }],
-            source: crate::sfdp::ProfileSource::Table,
+            source: crate::profile::ProfileSource::Table,
         });
         let image = vec![0u8; 2048];
         assert!(matches!(
@@ -817,7 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn erase_uses_profile_small_sector_at_tail() {
-        use crate::sfdp::{EraseType, FlashProfile, ProfileSource};
+        use crate::profile::{EraseType, FlashProfile, ProfileSource};
         let size = 256 * 1024;
         let flash = FakeFlash::new(size, [0xEF, 0x40, 0x15]);
         for i in 0..size {
@@ -890,7 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn detect_via_sfdp_builds_profile() {
-        use crate::sfdp::ProfileSource;
+        use crate::profile::ProfileSource;
         let flash = FakeFlash::new(2 * 1024 * 1024, [0xEF, 0x40, 0x15]);
         flash.set_sfdp(&sfdp_blob());
         let mut f = flasher(flash, FakeBus::new(), 256);
@@ -904,7 +904,7 @@ mod tests {
 
     #[tokio::test]
     async fn detect_uses_fallback_table_for_m25p16() {
-        use crate::sfdp::{EraseType, ProfileSource};
+        use crate::profile::{EraseType, ProfileSource};
         let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]); // M25P16: no SFDP, in table
         let mut f = flasher(flash, FakeBus::new(), 256);
         let p = f.detect_profile().await.unwrap();
@@ -953,13 +953,13 @@ mod tests {
         assert_eq!(&probe.mem()[..1000], &image[..]);
         assert_eq!(
             f.profile().unwrap().source,
-            crate::sfdp::ProfileSource::Sfdp
+            crate::profile::ProfileSource::Sfdp
         );
     }
 
     #[tokio::test]
     async fn four_byte_addressing_roundtrips() {
-        use crate::sfdp::{EraseType, FlashProfile, ProfileSource};
+        use crate::profile::{EraseType, FlashProfile, ProfileSource};
         let flash = FakeFlash::new(1024 * 1024, [0xEF, 0x40, 0x19]); // pretend 256 Mbit part
         let probe = flash.clone();
         let mut f = flasher(flash, FakeBus::new(), 256);
@@ -1257,15 +1257,15 @@ mod tests {
             Duration::ZERO,
             Duration::from_secs(1),
         );
-        f.set_profile(crate::sfdp::FlashProfile {
+        f.set_profile(crate::profile::FlashProfile {
             page_size: 256,
             address_bytes: 3,
             capacity: Some(2 * 1024 * 1024),
-            erase_types: vec![crate::sfdp::EraseType {
+            erase_types: vec![crate::profile::EraseType {
                 size: 64 * 1024,
                 opcode: 0xD8,
             }],
-            source: crate::sfdp::ProfileSource::Table,
+            source: crate::profile::ProfileSource::Table,
         });
         f
     }

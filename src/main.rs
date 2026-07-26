@@ -1,6 +1,7 @@
 mod catalog;
 mod device;
 mod flash;
+mod profile;
 mod sfdp;
 mod voice;
 
@@ -270,7 +271,7 @@ async fn run() -> Result<()> {
                     Ok(p) => {
                         print_profile(&p);
                         println!("SFDP:     {}",
-                            if p.source == sfdp::ProfileSource::Sfdp { "present" } else { "—" });
+                            if p.source == profile::ProfileSource::Sfdp { "present" } else { "—" });
                     }
                     Err(FlashError::UnsupportedChip { jedec }) => println!(
                         "unsupported: JEDEC {jedec:02X?} — no SFDP and no fallback-table entry (add one to FALLBACK_TABLE)"),
@@ -732,7 +733,7 @@ fn norbert_from<S: std::fmt::Debug, R: std::fmt::Debug>(e: FlashError<S, R>) -> 
     anyhow::anyhow!("{}", norbert_error(&e))
 }
 
-fn print_profile(p: &sfdp::FlashProfile) {
+fn print_profile(p: &profile::FlashProfile) {
     println!("source:   {:?}", p.source);
     println!("page:     {} B", p.page_size);
     println!("address:  {}-byte", p.address_bytes);
