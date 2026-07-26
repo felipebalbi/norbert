@@ -32,6 +32,9 @@ pub fn verify_fail(addr: usize) -> String {
 pub fn erased() -> &'static str {
     "Erasing...\nDone.\n\nYou can never be too careful."
 }
+pub fn cancelled() -> &'static str {
+    "Stopped. I've let go of the bus."
+}
 pub fn protected() -> &'static str {
     "Write protection is enabled.\n\nThat's not happening today."
 }
@@ -78,6 +81,7 @@ mod tests {
             verify_ok().to_string(),
             verify_fail(0x3A1280),
             erased().to_string(),
+            cancelled().to_string(),
             protected().to_string(),
             detect_opener().to_string(),
             protect_done().to_string(),

@@ -184,6 +184,29 @@ async fn main() {
     }
 }
 
+/// Acquire the bus, run `work` racing Ctrl-C, and ALWAYS release the bus.
+/// On Ctrl-C: drop the in-flight op (cooperative cancel at the next await),
+/// release the bus, print the cancellation line, and exit 130.
+async fn with_cancel(
+    f: &mut Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>,
+    out: &Out,
+    work: impl AsyncFnOnce(&mut Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>) -> Result<()>,
+) -> Result<()> {
+    f.acquire_bus().await.map_err(anyhow_from)?;
+    let outcome = tokio::select! {
+        r = work(f) => Some(r),
+        _ = tokio::signal::ctrl_c() => None,
+    };
+    let _ = f.release_bus();
+    match outcome {
+        Some(r) => r,
+        None => {
+            out.emit(voice::cancelled(), Some("FAIL: cancelled"));
+            std::process::exit(130);
+        }
+    }
+}
+
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -276,28 +299,18 @@ async fn run() -> Result<()> {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().await.map_err(anyhow_from)?;
-
-            // Detect first (bus held), release on error.
-            if let Err(e) = f.detect_profile().await {
-                let _ = f.release_bus();
-                return Err(norbert_from(e));
-            }
-            // Protection pre-check: speak, don't silently no-op.
-            match f.is_protected().await {
-                Ok(true) if !*unprotect => {
-                    let _ = f.release_bus();
-                    out.emit(voice::protected(), Some("FAIL: protected"));
-                    std::process::exit(1);
+            with_cancel(&mut f, &out, async |f| {
+                f.detect_profile().await.map_err(norbert_from)?;
+                // Protection pre-check: speak, don't silently no-op.
+                match f.is_protected().await {
+                    Ok(true) if !*unprotect => {
+                        let _ = f.release_bus(); // exit() bypasses with_cancel's release
+                        out.emit(voice::protected(), Some("FAIL: protected"));
+                        std::process::exit(1);
+                    }
+                    Ok(_) => {}
+                    Err(e) => return Err(anyhow_from(e)),
                 }
-                Ok(_) => {}
-                Err(e) => {
-                    let _ = f.release_bus();
-                    return Err(anyhow_from(e));
-                }
-            }
-
-            let res = async {
                 // Oversize guard from the detected capacity.
                 if let Some(cap) = f.profile().and_then(|p| p.capacity) {
                     if *offset + image.len() > cap {
@@ -326,11 +339,9 @@ async fn run() -> Result<()> {
                         .await
                         .map_err(norbert_from)?;
                 }
-                Ok::<(), anyhow::Error>(())
-            }
-            .await;
-            let _ = f.release_bus();
-            res?;
+                Ok(())
+            })
+            .await?;
             out.emit(voice::programmed(), Some("OK"));
         }
         Cmd::Read {
@@ -340,16 +351,13 @@ async fn run() -> Result<()> {
         } => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().await.map_err(anyhow_from)?;
             let mut buf = vec![0u8; *length];
-            let res = async {
+            with_cancel(&mut f, &out, async |f| {
                 f.detect_profile().await.map_err(norbert_from)?;
                 f.read(*offset, &mut buf).await.map_err(anyhow_from)?;
-                Ok::<(), anyhow::Error>(())
-            }
-            .await;
-            let _ = f.release_bus();
-            res?;
+                Ok(())
+            })
+            .await?;
             std::fs::write(outfile, &buf)
                 .with_context(|| format!("writing {}", outfile.display()))?;
             out.emit(
@@ -362,17 +370,14 @@ async fn run() -> Result<()> {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().await.map_err(anyhow_from)?;
-            let res = async {
+            with_cancel(&mut f, &out, async |f| {
                 f.detect_profile().await.map_err(norbert_from)?;
                 f.verify(*offset, &image, |_| {})
                     .await
                     .map_err(norbert_from)?;
-                Ok::<(), anyhow::Error>(())
-            }
-            .await;
-            let _ = f.release_bus();
-            res?;
+                Ok(())
+            })
+            .await?;
             out.emit(voice::verify_ok(), Some("OK"));
         }
         Cmd::Erase {
@@ -389,18 +394,15 @@ async fn run() -> Result<()> {
                 Some(length.context("erase needs --length N or --chip")?)
             };
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().await.map_err(anyhow_from)?;
-            let res = async {
+            with_cancel(&mut f, &out, async |f| {
                 f.detect_profile().await.map_err(norbert_from)?;
                 match len {
                     None => f.chip_erase().await.map_err(anyhow_from)?,
                     Some(len) => f.erase_range(*offset, len).await.map_err(anyhow_from)?,
                 }
-                Ok::<(), anyhow::Error>(())
-            }
-            .await;
-            let _ = f.release_bus();
-            res?;
+                Ok(())
+            })
+            .await?;
             out.emit(voice::erased(), Some("OK"));
         }
         Cmd::List => {
