@@ -69,7 +69,9 @@ impl BusAccess for HostBus {
     }
 }
 
-/// Live connection: keep `hal` alive for the lifetime of `spi`/`bus`.
+/// Live connection. Holds `_hal` only for construction; once `spi`/`bus` exist
+/// they each own an `Arc<Mutex<PicoDeGallo>>` clone that keeps the USB client
+/// (and its worker) alive, so the caller may drop `_hal`.
 pub struct Connected {
     pub _hal: Hal,
     pub spi: SpiDev,

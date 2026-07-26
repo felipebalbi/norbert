@@ -157,10 +157,14 @@ fn build_flasher_at(
     cli: &Cli,
     freq: u32,
 ) -> Result<Flasher<pico_de_gallo_hal::SpiDev, device::HostBus>> {
-    let conn = device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
+    let device::Connected { _hal, spi, bus } =
+        device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
     // Chunk to the firmware's max transfer for best throughput.
     let max_chunk = pico_de_gallo_lib::MAX_TRANSFER_SIZE.min(flash::PAGE_SIZE);
-    let Connected2 { spi, bus } = keep_alive(conn);
+    // `_hal` owns no runtime (we run inside norbert's #[tokio::main]); `spi`/`bus`
+    // hold Arc<Mutex<PicoDeGallo>> clones that keep the client alive, so dropping
+    // `_hal` here is safe — no Box::leak needed.
+    drop(_hal);
     Ok(Flasher::with_config(
         spi,
         bus,
@@ -170,30 +174,17 @@ fn build_flasher_at(
     ))
 }
 
-// Helper: keep the Hal handle alive for the process lifetime.
-struct Connected2 {
-    spi: pico_de_gallo_hal::SpiDev,
-    bus: device::HostBus,
-}
-fn keep_alive(conn: device::Connected) -> Connected2 {
-    // `Hal` owns the tokio runtime; SpiDev/Gpio only hold cloned Handles, which
-    // do NOT keep it alive. Leak `Hal` so the runtime outlives the handles for
-    // the whole process — this leak is required, not optional.
-    Box::leak(Box::new(conn._hal));
-    Connected2 {
-        spi: conn.spi,
-        bus: conn.bus,
-    }
-}
-
-fn main() {
-    if let Err(e) = run() {
+// multi_thread is REQUIRED: the HAL bridges its blocking GPIO/SPI-config calls
+// via tokio::task::block_in_place, which panics on a current-thread runtime.
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    if let Err(e) = run().await {
         eprintln!("{e:#}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.version {
@@ -210,8 +201,8 @@ fn run() -> Result<()> {
         Cmd::Jedec => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let r = f.read_id();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let r = f.read_id().await;
             let _ = f.release_bus();
             let id = r.map_err(anyhow_from)?;
             out.emit(
@@ -227,16 +218,16 @@ fn run() -> Result<()> {
         }
         Cmd::Info => {
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let out = (|| -> Result<()> {
-                let id = f.read_id().map_err(anyhow_from)?;
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let out = async {
+                let id = f.read_id().await.map_err(anyhow_from)?;
                 if !id.is_present() {
                     println!("no SPI-NOR flash detected (bus reads all 0x00/0xFF)");
                     return Ok(());
                 }
                 println!("JEDEC id: {id}");
                 println!("chip:     {}", catalog::describe(id.jedec()));
-                match f.detect_profile() {
+                match f.detect_profile().await {
                     Ok(p) => {
                         print_profile(&p);
                         println!("SFDP:     {}",
@@ -246,21 +237,23 @@ fn run() -> Result<()> {
                         "unsupported: JEDEC {jedec:02X?} — no SFDP and no fallback-table entry (add one to FALLBACK_TABLE)"),
                     Err(e) => return Err(anyhow_from(e)),
                 }
-                Ok(())
-            })();
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             out?;
         }
         Cmd::Detect => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
+            f.acquire_bus().await.map_err(anyhow_from)?;
             out.emit(voice::detect_opener(), None);
-            let res = (|| -> Result<[u8; 3]> {
-                let id = f.read_id().map_err(norbert_from)?;
-                f.detect_profile().map_err(norbert_from)?;
-                Ok(id.jedec())
-            })();
+            let res = async {
+                let id = f.read_id().await.map_err(norbert_from)?;
+                f.detect_profile().await.map_err(norbert_from)?;
+                Ok::<[u8; 3], anyhow::Error>(id.jedec())
+            }
+            .await;
             let _ = f.release_bus();
             let jedec = res?;
             let name = catalog::describe(jedec);
@@ -283,15 +276,15 @@ fn run() -> Result<()> {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
+            f.acquire_bus().await.map_err(anyhow_from)?;
 
             // Detect first (bus held), release on error.
-            if let Err(e) = f.detect_profile() {
+            if let Err(e) = f.detect_profile().await {
                 let _ = f.release_bus();
                 return Err(norbert_from(e));
             }
             // Protection pre-check: speak, don't silently no-op.
-            match f.is_protected() {
+            match f.is_protected().await {
                 Ok(true) if !*unprotect => {
                     let _ = f.release_bus();
                     out.emit(voice::protected(), Some("FAIL: protected"));
@@ -304,7 +297,7 @@ fn run() -> Result<()> {
                 }
             }
 
-            let res = (|| -> Result<()> {
+            let res = async {
                 // Oversize guard from the detected capacity.
                 if let Some(cap) = f.profile().and_then(|p| p.capacity) {
                     if *offset + image.len() > cap {
@@ -315,20 +308,27 @@ fn run() -> Result<()> {
                     }
                 }
                 if *unprotect {
-                    f.unprotect().map_err(anyhow_from)?;
+                    f.unprotect().await.map_err(anyhow_from)?;
                 }
                 out.emit(voice::programming(), None);
                 if *chip_erase {
-                    f.chip_erase().map_err(anyhow_from)?;
+                    f.chip_erase().await.map_err(anyhow_from)?;
                 } else {
-                    f.erase_range(*offset, image.len()).map_err(anyhow_from)?;
+                    f.erase_range(*offset, image.len())
+                        .await
+                        .map_err(anyhow_from)?;
                 }
-                f.program(*offset, &image, |_| {}).map_err(anyhow_from)?;
+                f.program(*offset, &image, |_| {})
+                    .await
+                    .map_err(anyhow_from)?;
                 if !*no_verify {
-                    f.verify(*offset, &image, |_| {}).map_err(norbert_from)?;
+                    f.verify(*offset, &image, |_| {})
+                        .await
+                        .map_err(norbert_from)?;
                 }
-                Ok(())
-            })();
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             res?;
             out.emit(voice::programmed(), Some("OK"));
@@ -340,13 +340,14 @@ fn run() -> Result<()> {
         } => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
+            f.acquire_bus().await.map_err(anyhow_from)?;
             let mut buf = vec![0u8; *length];
-            let res = (|| -> Result<()> {
-                f.detect_profile().map_err(norbert_from)?;
-                f.read(*offset, &mut buf).map_err(anyhow_from)?;
-                Ok(())
-            })();
+            let res = async {
+                f.detect_profile().await.map_err(norbert_from)?;
+                f.read(*offset, &mut buf).await.map_err(anyhow_from)?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             res?;
             std::fs::write(outfile, &buf)
@@ -361,12 +362,15 @@ fn run() -> Result<()> {
             let image = std::fs::read(bitstream)
                 .with_context(|| format!("reading {}", bitstream.display()))?;
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let res = (|| -> Result<()> {
-                f.detect_profile().map_err(norbert_from)?;
-                f.verify(*offset, &image, |_| {}).map_err(norbert_from)?;
-                Ok(())
-            })();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let res = async {
+                f.detect_profile().await.map_err(norbert_from)?;
+                f.verify(*offset, &image, |_| {})
+                    .await
+                    .map_err(norbert_from)?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             res?;
             out.emit(voice::verify_ok(), Some("OK"));
@@ -385,15 +389,16 @@ fn run() -> Result<()> {
                 Some(length.context("erase needs --length N or --chip")?)
             };
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let res = (|| -> Result<()> {
-                f.detect_profile().map_err(norbert_from)?;
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let res = async {
+                f.detect_profile().await.map_err(norbert_from)?;
                 match len {
-                    None => f.chip_erase().map_err(anyhow_from)?,
-                    Some(len) => f.erase_range(*offset, len).map_err(anyhow_from)?,
+                    None => f.chip_erase().await.map_err(anyhow_from)?,
+                    Some(len) => f.erase_range(*offset, len).await.map_err(anyhow_from)?,
                 }
-                Ok(())
-            })();
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             res?;
             out.emit(voice::erased(), Some("OK"));
@@ -412,32 +417,33 @@ fn run() -> Result<()> {
         }
         Cmd::Sfdp => {
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let out = (|| -> Result<()> {
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let out = async {
                 let mut header = [0u8; 8];
-                f.read_sfdp(0, &mut header).map_err(anyhow_from)?;
+                f.read_sfdp(0, &mut header).await.map_err(anyhow_from)?;
                 if sfdp::SfdpHeader::parse(&header).is_none() {
                     println!("no SFDP (signature absent)");
                     return Ok(());
                 }
                 // Dump the first 256 bytes of SFDP space as hex.
                 let mut blob = vec![0u8; 256];
-                f.read_sfdp(0, &mut blob).map_err(anyhow_from)?;
+                f.read_sfdp(0, &mut blob).await.map_err(anyhow_from)?;
                 println!("SFDP (first 256 bytes):");
                 for (i, chunk) in blob.chunks(16).enumerate() {
                     let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02X}")).collect();
                     println!("  {:04X}: {}", i * 16, hex.join(" "));
                 }
-                Ok(())
-            })();
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             let _ = f.release_bus();
             out?;
         }
         Cmd::Protect => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let r = f.protect();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let r = f.protect().await;
             let _ = f.release_bus();
             r.map_err(anyhow_from)?;
             out.emit(voice::protect_done(), Some("OK"));
@@ -445,8 +451,8 @@ fn run() -> Result<()> {
         Cmd::Unprotect => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let r = f.unprotect();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let r = f.unprotect().await;
             let _ = f.release_bus();
             r.map_err(anyhow_from)?;
             out.emit(voice::unprotect_done(), Some("OK"));
@@ -454,8 +460,8 @@ fn run() -> Result<()> {
         Cmd::Reset => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let r = f.reset_flash();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let r = f.reset_flash().await;
             let _ = f.release_bus(); // also reboots a held master
             r.map_err(anyhow_from)?;
             out.emit(voice::reset_done(), Some("OK"));
@@ -464,12 +470,13 @@ fn run() -> Result<()> {
             let out = Out::new(&cli);
             // 1. RDID at --freq, bus held.
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            let id_res = f.read_id();
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            let id_res = f.read_id().await;
             // 3. SFDP readable? (still bus-held)
             let sfdp_res = {
                 let mut hdr = [0u8; 8];
                 f.read_sfdp(0, &mut hdr)
+                    .await
                     .map(|_| sfdp::SfdpHeader::parse(&hdr).is_some())
             };
             let _ = f.release_bus();
@@ -512,12 +519,12 @@ fn run() -> Result<()> {
             for freq in [1_000_000u32, 5_000_000, 10_000_000] {
                 match build_flasher_at(&cli, freq) {
                     Ok(mut ff) => {
-                        if ff.acquire_bus().is_err() {
+                        if ff.acquire_bus().await.is_err() {
                             println!("  {freq} Hz: bus acquire failed");
                             stable = false;
                             continue;
                         }
-                        let r = ff.read_id();
+                        let r = ff.read_id().await;
                         let _ = ff.release_bus();
                         match r {
                             Ok(fid) if fid.jedec() == id.jedec() => println!(
@@ -553,22 +560,23 @@ fn run() -> Result<()> {
         Cmd::Test { sector } => {
             let out = Out::new(&cli);
             let mut f = build_flasher(&cli)?;
-            f.acquire_bus().map_err(anyhow_from)?;
-            if let Err(e) = f.detect_profile() {
+            f.acquire_bus().await.map_err(anyhow_from)?;
+            if let Err(e) = f.detect_profile().await {
                 let _ = f.release_bus();
                 return Err(norbert_from(e));
             }
             match sector {
                 None => {
                     // Read-only bus-stability check: read the first 4 KiB twice, compare.
-                    let res = (|| -> Result<bool> {
+                    let res = async {
                         let n = 4096;
                         let mut a = vec![0u8; n];
                         let mut b = vec![0u8; n];
-                        f.read(0, &mut a).map_err(anyhow_from)?;
-                        f.read(0, &mut b).map_err(anyhow_from)?;
-                        Ok(a == b)
-                    })();
+                        f.read(0, &mut a).await.map_err(anyhow_from)?;
+                        f.read(0, &mut b).await.map_err(anyhow_from)?;
+                        Ok::<bool, anyhow::Error>(a == b)
+                    }
+                    .await;
                     let _ = f.release_bus();
                     if !res? {
                         return Err(anyhow::anyhow!(
@@ -579,7 +587,7 @@ fn run() -> Result<()> {
                 }
                 Some(n) => {
                     // Refuse a protected part before touching anything.
-                    match f.is_protected() {
+                    match f.is_protected().await {
                         Ok(true) => {
                             let _ = f.release_bus();
                             out.emit(voice::protected(), Some("FAIL: protected"));
@@ -606,25 +614,33 @@ fn run() -> Result<()> {
                     }
                     // Back up the sector before destroying it.
                     let mut backup = vec![0u8; sec];
-                    if let Err(e) = f.read(base, &mut backup) {
+                    if let Err(e) = f.read(base, &mut backup).await {
                         let _ = f.release_bus();
                         return Err(anyhow_from(e));
                     }
                     // Destructive pattern test.
                     let pattern: Vec<u8> = (0..sec).map(|i| (i as u8) ^ 0xA5).collect();
-                    let test_res = (|| -> Result<()> {
-                        f.erase_range(base, sec).map_err(anyhow_from)?;
-                        f.program(base, &pattern, |_| {}).map_err(anyhow_from)?;
-                        f.verify(base, &pattern, |_| {}).map_err(norbert_from)?;
-                        Ok(())
-                    })();
+                    let test_res = async {
+                        f.erase_range(base, sec).await.map_err(anyhow_from)?;
+                        f.program(base, &pattern, |_| {})
+                            .await
+                            .map_err(anyhow_from)?;
+                        f.verify(base, &pattern, |_| {})
+                            .await
+                            .map_err(norbert_from)?;
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    .await;
                     // ALWAYS attempt to restore the original, even if the test failed.
-                    let restore_res = (|| -> Result<()> {
-                        f.erase_range(base, sec).map_err(anyhow_from)?;
-                        f.program(base, &backup, |_| {}).map_err(anyhow_from)?;
-                        f.verify(base, &backup, |_| {}).map_err(anyhow_from)?;
-                        Ok(())
-                    })();
+                    let restore_res = async {
+                        f.erase_range(base, sec).await.map_err(anyhow_from)?;
+                        f.program(base, &backup, |_| {})
+                            .await
+                            .map_err(anyhow_from)?;
+                        f.verify(base, &backup, |_| {}).await.map_err(anyhow_from)?;
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    .await;
                     let _ = f.release_bus();
                     test_res?;
                     restore_res
