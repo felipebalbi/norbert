@@ -8,7 +8,7 @@ I've been doing this sort of thing for a while. I like to take my time,
 read the datasheet, and verify my work before declaring success.
 Computers are fast enough already.
 
-If you're looking for animated progress bars, motivational quotes, or
+If you're looking for blinking spinners, motivational quotes, or
 RGB lighting, I'm probably not your tool.
 
 If you need to identify a flash chip, erase it, program it, verify it,
@@ -48,16 +48,16 @@ Hmm... let's see what we've got here.
 Found Winbond W25Q128JV.
 
 $ norbert info
+Let me see what this one says about itself.
 JEDEC id: mfr=0xEF type=0x40 cap=0x18 (16384 KiB)
 chip:     Winbond W25Q128JV
-source:   Sfdp
+source:   SFDP
 page:     256 B
 address:  3-byte
 capacity: 16384 KiB
-erase types:
-    65536 B  op 0xD8
-     4096 B  op 0x20
-SFDP:     present
+SFDP rev: 1.6
+erase:    65536:D8 4096:20
+It told me all that itself. I appreciate a chip that keeps notes.
 
 $ norbert erase --chip
 Erasing...
@@ -66,8 +66,13 @@ Done.
 You can never be too careful.
 
 $ norbert program firmware.bin
-Programming...
-Done. Have a nice boot.
+Programming firmware.bin — 512 KiB at 0x000000.
+
+  erase    [██████████████████████████]  3/3 blocks
+  program  [██████████████████████████]  512 KiB/512 KiB
+  verify   [██████████████████████████]  512 KiB/512 KiB
+
+Done. Have a nice boot.  (erased 3 blocks, wrote 512 KiB in 4.2s)
 
 $ norbert verify firmware.bin
 Everything checks out.
