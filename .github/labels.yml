@@ -1,0 +1,66 @@
+# Norbert label taxonomy — the source of truth.
+#
+# This file DOCUMENTS the labels Norbert uses. By design it is NOT applied by any
+# workflow; a maintainer creates/edits labels to match (web UI, or `gh label`).
+# The shape is compatible with EndBug/label-sync and github-label-sync, should a
+# sync step ever be added.
+#
+# Create one by hand with, e.g.:
+#   gh label create new-chip --color 0e8a16 \
+#     --description "Adds a chip to CHIP_NAMES or FALLBACK_TABLE"
+
+# --- Type -------------------------------------------------------------------
+- name: bug
+  color: d73a4a
+  description: Something is broken.
+- name: enhancement
+  color: a2eeef
+  description: New capability or improvement.
+- name: documentation
+  color: 0075ca
+  description: README, HARDWARE-DEBUG, or rustdoc.
+- name: refactor
+  color: fbca04
+  description: Internal change, no behavior change.
+- name: dependencies
+  color: 0366d6
+  description: Dependency or toolchain bumps (dependabot).
+
+# --- Catalog ----------------------------------------------------------------
+- name: new-chip
+  color: 0e8a16
+  description: Adds a chip to CHIP_NAMES or FALLBACK_TABLE.
+- name: new-manufacturer
+  color: 1d76db
+  description: Adds a JEDEC vendor ID to manufacturer().
+
+# --- Workflow ---------------------------------------------------------------
+- name: triage
+  color: ededed
+  description: New issue, awaiting maintainer.
+- name: needs-hardware-test
+  color: b60205
+  description: Unverified on real silicon; blocks merge.
+- name: needs-datasheet
+  color: fef2c0
+  description: Catalog entry lacks a datasheet citation.
+- name: good first issue
+  color: 7057ff
+  description: Approachable — e.g. adding a known chip.
+- name: help wanted
+  color: '008672'
+  description: Maintainer would welcome help here.
+
+# --- Resolution -------------------------------------------------------------
+- name: duplicate
+  color: cfd3d7
+  description: Already tracked elsewhere.
+- name: invalid
+  color: e4e669
+  description: Not actionable as filed.
+- name: wontfix
+  color: ffffff
+  description: Deliberately out of scope.
+- name: question
+  color: d876e3
+  description: A question, not tracked work.
