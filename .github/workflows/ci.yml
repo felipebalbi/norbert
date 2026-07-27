@@ -26,7 +26,7 @@ jobs:
     name: stable / fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -43,7 +43,7 @@ jobs:
       matrix:
         toolchain: [stable, beta]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install ${{ matrix.toolchain }}
         uses: dtolnay/rust-toolchain@master
         with:
@@ -57,7 +57,7 @@ jobs:
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - run: cargo doc --no-deps --locked
@@ -70,7 +70,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
@@ -79,7 +79,7 @@ jobs:
     name: ubuntu / 1.97 / check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install 1.97
         uses: dtolnay/rust-toolchain@master
         with:
@@ -90,7 +90,7 @@ jobs:
     name: ubuntu / stable / lockfile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - run: cargo check --locked
@@ -99,7 +99,7 @@ jobs:
     name: ubuntu / actionlint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
