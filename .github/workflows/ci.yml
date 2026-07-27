@@ -1,0 +1,103 @@
+# CI for Norbert. Runs on PRs and on pushes to main.
+#
+#   fmt        — rustfmt check
+#   clippy     — lints as errors (stable + beta early-warning)
+#   doc        — rustdoc builds cleanly (broken intra-doc links fail)
+#   test       — cargo test on Linux, macOS, and Windows
+#   msrv       — builds on the pinned minimum supported Rust version (1.97)
+#   lockfile   — Cargo.lock is in sync with Cargo.toml
+#   actionlint — the workflow files themselves are valid
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: stable / fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: ${{ matrix.toolchain }} / clippy
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  doc:
+    name: stable / doc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-deps --locked
+
+  test:
+    name: ${{ matrix.os }} / stable / test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+
+  msrv:
+    name: ubuntu / 1.97 / check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install 1.97
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97"
+      - run: cargo check --locked
+
+  lockfile:
+    name: ubuntu / stable / lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --locked
+
+  actionlint:
+    name: ubuntu / actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
