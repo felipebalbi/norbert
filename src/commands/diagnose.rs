@@ -2,7 +2,7 @@
 
 use embedded_hal_async::spi::SpiDevice;
 
-use super::{build_flasher, build_flasher_at, with_bus};
+use super::{build_flasher, build_flasher_at, with_cancel};
 use crate::catalog;
 use crate::cli::Cli;
 use crate::error::NorbertError;
@@ -140,7 +140,9 @@ where
     SPI: SpiDevice,
     RST: BusAccess,
 {
-    with_bus(f, async |f| {
+    // with_cancel (not with_bus): the destructive --sector path does seconds of
+    // erase/program/restore, so a Ctrl-C must still release the held bus master.
+    with_cancel(f, async |f| {
         f.detect_profile().await?;
         match sector {
             None => {
