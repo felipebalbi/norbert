@@ -217,4 +217,36 @@ mod tests {
         assert!(s.contains("source=table\n"), "got:\n{s}");
         assert!(s.contains("address=3-byte\n"), "got:\n{s}");
     }
+
+    #[tokio::test]
+    async fn sfdp_absent_emits_machine_token() {
+        // Default FakeFlash has no SFDP, so read_sfdp returns 0xFF and parse fails.
+        let mut f = flasher(
+            FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]),
+            FakeBus::new(),
+            256,
+        );
+        let (mut ui, out, _e) = Ui::captured(Mode::Machine);
+        sfdp(&mut f, &mut ui).await.unwrap();
+        assert_eq!(out.contents(), "sfdp=absent\n");
+    }
+
+    #[test]
+    fn list_frames_in_human_and_is_bare_in_machine() {
+        // Machine: rows only, voice opener/note suppressed.
+        let (mut ui, out, _e) = Ui::captured(Mode::Machine);
+        list(&mut ui);
+        let m = out.contents();
+        assert!(m.contains("20 20 15  Micron M25P16\n"), "got:\n{m}");
+        assert!(!m.contains(voice::list_opener()));
+        assert!(!m.contains(voice::list_note()));
+
+        // Human: opener + rows + note.
+        let (mut ui, out, _e) = Ui::captured(Mode::Human);
+        list(&mut ui);
+        let h = out.contents();
+        assert!(h.starts_with(voice::list_opener()));
+        assert!(h.contains("20 20 15  Micron M25P16\n"));
+        assert!(h.trim_end().ends_with(voice::list_note()));
+    }
 }
