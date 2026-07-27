@@ -119,31 +119,23 @@ The v1.1 connector is a keyed **2×12 (24-pin)** box header. Viewed from above
 with the USB pointing up, pin 1 is top-right:
 
 ```
-        ┌──────── USB ────────┐
- pin  2 │ GND *        VREF     │ pin  1
- pin  4 │ I2C_SCL      I2C_SDA  │ pin  3
- pin  6 │ SPI_MOSI *   SPI_MISO*│ pin  5
- pin  8 │ SPI_CS       SPI_SCK *│ pin  7
- pin 10 │ UART_RX      UART_TX  │ pin  9
- pin 12 │ GPIO1 *      GPIO0   *│ pin 11
- pin 14 │ GPIO3 *      GPIO2   *│ pin 13
- pin 16 │ PWM1         PWM0     │ pin 15
- pin 18 │ PWM3         PWM2     │ pin 17
- pin 20 │ ADC0         ONEWIRE  │ pin 19
- pin 22 │ ADC2         ADC1     │ pin 21
- pin 24 │ GND          +3V3     │ pin 23
-        └─────────────────────┘
+       ┌──────── USB ────────┐
+pin  2 │ GND                 │ pin  1
+pin  4 │                     │ pin  3
+pin  6 │ SPI_MOSI   SPI_MISO │ pin  5
+pin  8 │             SPI_SCK │ pin  7
+pin 10 │                     │ pin  9
+pin 12 │ /WP              CS │ pin 11
+pin 14 │ CRESET        /HOLD │ pin 13
+pin 16 │                     │ pin 15
+pin 18 │                     │ pin 17
+pin 20 │                     │ pin 19
+pin 22 │                     │ pin 21
+pin 24 │                     │ pin 23
+       └─────────────────────┘
 
- * used by Norbert:
-   pin  6  SPI_MOSI → flash IO0 / SI  (data in)
-   pin  5  SPI_MISO → flash IO1 / SO  (data out)
-   pin  7  SPI_SCK  → flash SCK
-   pin 11  GPIO0    → flash CS
-   pin 12  GPIO1    → flash /WP   (driven high)
-   pin 13  GPIO2    → flash /HOLD  (driven high)
-   pin 14  GPIO3    → target CRESET (only with --reset)
-   pin  2  GND      → common ground (pin 24 is also GND)
-   pin  1 / 23      → +3V3, optional flash power
+ Only the pins Norbert connects are labelled; every other pin is unused.
+ /WP and /HOLD are held high; CRESET (pin 14) is driven only with --reset.
 ```
 
 ## Connecting
