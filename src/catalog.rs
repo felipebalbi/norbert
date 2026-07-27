@@ -139,6 +139,19 @@ mod tests {
     }
 
     #[test]
+    fn every_fallback_row_has_a_usable_erase_menu() {
+        // lookup_fallback `.expect`s a non-empty erase menu; guard the table so a
+        // bad new row fails CI here instead of panicking in the field on `detect`.
+        for c in FALLBACK_TABLE {
+            assert!(
+                lookup_fallback(c.jedec).is_some(),
+                "fallback row {:02X?} has an empty erase menu",
+                c.jedec
+            );
+        }
+    }
+
+    #[test]
     fn names_and_manufacturers() {
         assert_eq!(describe([0xEF, 0x40, 0x18]), "Winbond W25Q128JV");
         assert_eq!(manufacturer(0xEF), Some("Winbond"));

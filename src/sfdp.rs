@@ -58,6 +58,7 @@ pub struct Bfpt {
     pub address_width: AddressWidth,
     pub page_size: usize,
     pub capacity: Option<usize>,
+    /// Decoded erase granularities, sorted largest-size first (see `parse`).
     pub erase_types: Vec<EraseType>,
 }
 
