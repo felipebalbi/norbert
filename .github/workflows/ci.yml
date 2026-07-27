@@ -36,6 +36,8 @@ jobs:
   clippy:
     name: ${{ matrix.toolchain }} / clippy
     runs-on: ubuntu-latest
+    # beta is an early-warning lane for new/renamed lints; don't fail the run on it.
+    continue-on-error: ${{ matrix.toolchain == 'beta' }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +100,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker://rhysd/actionlint:latest
+      - uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
