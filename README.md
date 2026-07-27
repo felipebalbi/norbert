@@ -119,20 +119,20 @@ The v1.1 connector is a keyed **2×12 (24-pin)** box header. Viewed from above
 with the USB pointing up, pin 1 is top-right:
 
 ```
-       ┌──────── USB ────────┐
-pin  2 │ GND                 │ pin  1
-pin  4 │                     │ pin  3
-pin  6 │ SPI_MOSI   SPI_MISO │ pin  5
-pin  8 │             SPI_SCK │ pin  7
-pin 10 │                     │ pin  9
-pin 12 │ /WP              CS │ pin 11
-pin 14 │ CRESET        /HOLD │ pin 13
-pin 16 │                     │ pin 15
-pin 18 │                     │ pin 17
-pin 20 │                     │ pin 19
-pin 22 │                     │ pin 21
-pin 24 │                     │ pin 23
-       └─────────────────────┘
+          ┌─────────────────────┐
+   pin  2 │ GND                 │ pin  1
+   pin  4 │                     │ pin  3
+   pin  6 │ SPI_MOSI   SPI_MISO │ pin  5
+   pin  8 │             SPI_SCK │ pin  7
+U  pin 10 │                     │ pin  9
+S  pin 12 │ /WP              CS │ pin 11
+B  pin 14 │ CRESET        /HOLD │ pin 13
+   pin 16 │                     │ pin 15
+   pin 18 │                     │ pin 17
+   pin 20 │                     │ pin 19
+   pin 22 │                     │ pin 21
+   pin 24 │                     │ pin 23
+          └─────────────────────┘
 
  Only the pins Norbert connects are labelled; every other pin is unused.
  /WP and /HOLD are held high; CRESET (pin 14) is driven only with --reset.
