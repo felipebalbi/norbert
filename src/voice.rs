@@ -57,6 +57,10 @@ pub fn doctor_rdid_fail() -> &'static str {
 pub fn doctor_unstable() -> &'static str {
     "Something's off at higher speeds.\n\nTry shorter leads or a lower --freq."
 }
+/// doctor: what to check when no chip answers.
+pub fn doctor_no_chip_hint() -> &'static str {
+    "  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio)."
+}
 pub fn version() -> String {
     format!("Norbert {VERSION}\nReliable since Tuesday.")
 }
@@ -89,7 +93,8 @@ pub fn programming_intro(name: &str, size: &str, offset: usize) -> String {
     format!("Programming {name} — {size} at 0x{offset:06X}.")
 }
 pub fn program_summary(blocks: usize, size: &str, secs: f64) -> String {
-    format!("Done. Have a nice boot.  (erased {blocks} blocks, wrote {size} in {secs:.1}s)")
+    let unit = if blocks == 1 { "block" } else { "blocks" };
+    format!("Done. Have a nice boot.  (erased {blocks} {unit}, wrote {size} in {secs:.1}s)")
 }
 pub fn doctor_intro() -> &'static str {
     "Let's have a look. I'll take my time."
@@ -122,6 +127,7 @@ mod tests {
             reset_done().to_string(),
             doctor_rdid_fail().to_string(),
             doctor_unstable().to_string(),
+            doctor_no_chip_hint().to_string(),
             nothing_unusual().to_string(),
             version(),
             info_opener().to_string(),

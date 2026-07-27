@@ -46,7 +46,7 @@ pub async fn doctor(cli: &Cli, ui: &mut Ui) -> Result<(), NorbertError> {
     );
     if !id.is_present() {
         ui.line(voice::no_flash(), "FAIL: no chip");
-        ui.say("  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio).");
+        ui.say(voice::doctor_no_chip_hint());
         return Ok(());
     }
     ui.line(
