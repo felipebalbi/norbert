@@ -128,7 +128,8 @@ impl ErasePlan {
 
 /// Plan a minimal-ish erase covering `[offset, offset+len)`. Greedily takes the
 /// largest address-aligned erase type that does not overshoot past the region
-/// (rounded up to the smallest granularity), else the smallest. `(addr, opcode)`.
+/// (rounded up to the smallest granularity), else the smallest. The returned
+/// `ErasePlan` is executed verbatim, in order, by `Flasher::run_erase`.
 pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> ErasePlan {
     let mut ops = Vec::new();
     if len == 0 {
