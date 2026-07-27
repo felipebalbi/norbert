@@ -567,10 +567,7 @@ where
 mod tests {
     use super::*;
 
-    use embedded_hal::spi::{Error as SpiErrorTrait, ErrorKind, ErrorType};
-    use std::cell::RefCell;
-    use std::convert::Infallible;
-    use std::rc::Rc;
+    use super::testfakes::{FakeBus, FakeFlash, flasher};
 
     /// 64 KiB erase block (test reference constant; production geometry comes from FlashProfile).
     const BLOCK_SIZE: usize = 64 * 1024;
@@ -909,6 +906,16 @@ mod tests {
         f.acquire_bus().await.unwrap(); // must hold the bus AND wake the flash
         assert!(f.read_id().await.unwrap().is_present());
     }
+}
+
+#[cfg(test)]
+pub(crate) mod testfakes {
+    use super::*;
+
+    use embedded_hal::spi::{Error as SpiErrorTrait, ErrorKind, ErrorType};
+    use std::cell::RefCell;
+    use std::convert::Infallible;
+    use std::rc::Rc;
 
     #[derive(Debug)]
     pub struct FakeErr;
@@ -932,10 +939,10 @@ mod tests {
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
     /// clone into a `Flasher`.
     #[derive(Clone)]
-    struct FakeFlash(Rc<RefCell<FakeState>>);
+    pub(crate) struct FakeFlash(Rc<RefCell<FakeState>>);
 
     impl FakeFlash {
-        fn new(size: usize, id: [u8; 3]) -> Self {
+        pub(crate) fn new(size: usize, id: [u8; 3]) -> Self {
             FakeFlash(Rc::new(RefCell::new(FakeState {
                 mem: vec![0xFF; size],
                 id,
@@ -947,22 +954,22 @@ mod tests {
                 powered_down: false,
             })))
         }
-        fn set_busy_reads(&self, n: u32) {
+        pub(crate) fn set_busy_reads(&self, n: u32) {
             self.0.borrow_mut().busy_reads = n;
         }
-        fn set_sfdp(&self, blob: &[u8]) {
+        pub(crate) fn set_sfdp(&self, blob: &[u8]) {
             self.0.borrow_mut().sfdp = blob.to_vec();
         }
-        fn set_protected(&self, p: bool) {
+        pub(crate) fn set_protected(&self, p: bool) {
             self.0.borrow_mut().protected = p;
         }
-        fn set_powered_down(&self, p: bool) {
+        pub(crate) fn set_powered_down(&self, p: bool) {
             self.0.borrow_mut().powered_down = p;
         }
-        fn mem(&self) -> Vec<u8> {
+        pub(crate) fn mem(&self) -> Vec<u8> {
             self.0.borrow().mem.clone()
         }
-        fn preset(&self, addr: usize, bytes: &[u8]) {
+        pub(crate) fn preset(&self, addr: usize, bytes: &[u8]) {
             self.0.borrow_mut().mem[addr..addr + bytes.len()].copy_from_slice(bytes);
         }
     }
@@ -1092,9 +1099,9 @@ mod tests {
 
     /// Shareable reset line; `true` = asserted (FPGA held in reset).
     #[derive(Clone)]
-    struct FakeBus(Rc<RefCell<bool>>);
+    pub(crate) struct FakeBus(Rc<RefCell<bool>>);
     impl FakeBus {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             FakeBus(Rc::new(RefCell::new(false)))
         }
     }
@@ -1112,7 +1119,11 @@ mod tests {
 
     /// Fast Flasher over the fakes (zero poll interval so tests don't sleep),
     /// pre-loaded with a default profile so geometry ops resolve.
-    fn flasher(flash: FakeFlash, bus: FakeBus, max_chunk: usize) -> Flasher<FakeFlash, FakeBus> {
+    pub(crate) fn flasher(
+        flash: FakeFlash,
+        bus: FakeBus,
+        max_chunk: usize,
+    ) -> Flasher<FakeFlash, FakeBus> {
         let mut f = Flasher::with_config(
             flash,
             bus,
