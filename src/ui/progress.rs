@@ -18,7 +18,8 @@ pub struct Progress {
     erase: Option<ProgressBar>,
     program: Option<ProgressBar>,
     verify: Option<ProgressBar>,
-    // Held only to keep the shared draw target alive; never read directly.
+    // Owns the MultiProgress for the run's lifetime (kept for future
+    // suspend/println use); never read directly.
     #[allow(dead_code)]
     mp: Option<MultiProgress>,
 }
@@ -115,5 +116,24 @@ mod tests {
         p.program_to(50);
         p.verify_to(0);
         p.finish(); // must not panic and must draw nothing
+    }
+
+    #[test]
+    fn human_mode_templates_parse() {
+        // The only test that forces `ProgressStyle::with_template(..).unwrap()` to
+        // run — a malformed template would otherwise panic only in production.
+        // Headless (no TTY) indicatif suppresses rendering, so this draws nothing.
+        let p = Progress::new(
+            Mode::Human,
+            ProgressPlan {
+                erase_blocks: Some(3),
+                program_bytes: Some(512),
+                verify_bytes: Some(512),
+            },
+        );
+        p.erase_to(1);
+        p.program_to(256);
+        p.verify_to(0);
+        p.finish();
     }
 }
