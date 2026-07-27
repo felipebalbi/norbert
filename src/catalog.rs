@@ -8,6 +8,7 @@ pub fn manufacturer(id: u8) -> Option<&'static str> {
         0xEF => "Winbond",
         0x20 => "Micron/Numonyx",
         0xC2 => "Macronix",
+        0xC8 => "GigaDevice",
         0x1C => "EON",
         0x01 => "Cypress/Spansion",
         0xBF => "SST",
@@ -48,6 +49,10 @@ pub static CHIP_NAMES: &[NamedChip] = &[
     NamedChip {
         jedec: [0xC2, 0x20, 0x18],
         name: "Macronix MX25L128",
+    },
+    NamedChip {
+        jedec: [0xC8, 0x40, 0x15],
+        name: "GigaDevice GD25Q16",
     },
     // add more as you meet them…
 ];
@@ -157,5 +162,11 @@ mod tests {
         assert_eq!(manufacturer(0xEF), Some("Winbond"));
         assert!(describe([0xEF, 0x40, 0x99]).starts_with("Winbond SPI NOR"));
         assert!(describe([0x77, 0x77, 0x77]).starts_with("unknown flash"));
+
+        // GigaDevice GD25Q16 (JEDEC C8 40 15): SFDP-capable but was unnamed.
+        assert_eq!(manufacturer(0xC8), Some("GigaDevice"));
+        assert_eq!(describe([0xC8, 0x40, 0x15]), "GigaDevice GD25Q16");
+        // Known vendor, unknown exact part → vendor-tagged, not "unknown flash".
+        assert!(describe([0xC8, 0x40, 0x99]).starts_with("GigaDevice SPI NOR"));
     }
 }
