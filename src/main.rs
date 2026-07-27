@@ -1,5 +1,6 @@
 mod catalog;
 mod device;
+mod error;
 mod flash;
 mod profile;
 mod sfdp;
