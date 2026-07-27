@@ -194,3 +194,56 @@ where
     ui.line(voice::verify_ok(), "OK");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flash::testfakes::{FakeBus, FakeFlash, flasher};
+    use crate::ui::{Mode, Ui};
+
+    // A unique temp path per (test, process) so parallel runs don't collide.
+    fn temp_image(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("norbert-{tag}-{}.bin", std::process::id()));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn program_refuses_a_protected_chip_and_writes_nothing() {
+        let path = temp_image("prot", &[0xABu8; 512]);
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]); // M25P16 (fallback)
+        flash.set_protected(true);
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, _o, _e) = Ui::captured(Mode::Machine);
+
+        let r = program(&mut f, &mut ui, &path, 0, true, false, false).await;
+        std::fs::remove_file(&path).ok();
+
+        assert!(matches!(r, Err(NorbertError::Protected)));
+        // The safety property: a protected chip is neither erased nor written.
+        assert!(
+            probe.mem().iter().all(|&b| b == 0xFF),
+            "protected chip was modified"
+        );
+    }
+
+    #[tokio::test]
+    async fn program_erases_writes_and_verifies_ok() {
+        let image: Vec<u8> = (0..600).map(|i| (i % 256) as u8).collect();
+        let path = temp_image("prog", &image);
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, out, _e) = Ui::captured(Mode::Machine);
+
+        // verify ON (no_verify = false); a mismatch would surface as Err here.
+        program(&mut f, &mut ui, &path, 0, false, false, false)
+            .await
+            .unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(&probe.mem()[..600], &image[..]);
+        assert_eq!(out.contents(), "OK\n"); // machine token; voice/progress suppressed
+    }
+}
