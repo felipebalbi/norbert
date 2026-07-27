@@ -68,11 +68,11 @@ You can never be too careful.
 $ norbert program firmware.bin
 Programming firmware.bin — 512 KiB at 0x000000.
 
-  erase    [██████████████████████████]  3/3 blocks
+  erase    [██████████████████████████]  8/8 blocks
   program  [██████████████████████████]  512 KiB/512 KiB
   verify   [██████████████████████████]  512 KiB/512 KiB
 
-Done. Have a nice boot.  (erased 3 blocks, wrote 512 KiB in 4.2s)
+Done. Have a nice boot.  (erased 8 blocks, wrote 512 KiB in 4.2s)
 
 $ norbert verify firmware.bin
 Everything checks out.
