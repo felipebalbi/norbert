@@ -171,6 +171,12 @@ where. The code stays professional; only I get to have a personality.
 
 Happy flashing.
 
+## Contributing
+
+Found a chip Norbert doesn't know yet, or want to add a feature? See
+[CONTRIBUTING.md](CONTRIBUTING.md). Adding a chip to the table is the easiest
+place to start — there's a short PR template just for it.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
