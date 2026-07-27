@@ -289,7 +289,7 @@ mod tests {
 
 - [ ] **Step 2: Run the new tests and verify they pass**
 
-Run: `cargo test --lib cli::tests`
+Run: `cargo test cli::tests` (norbert is a binary-only crate — do **not** use `--lib`, which errors with "no library targets found").
 Expected: `test result: ok. 2 passed`.
 
 - [ ] **Step 3: Commit**
