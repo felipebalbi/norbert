@@ -26,25 +26,15 @@ pub struct NamedChip {
     pub name: &'static str,
 }
 pub static CHIP_NAMES: &[NamedChip] = &[
+    // Keep sorted ascending by `jedec` — `describe` binary-searches this, and a test
+    // enforces the ordering.
     NamedChip {
-        jedec: [0xEF, 0x40, 0x18],
-        name: "Winbond W25Q128JV",
-    },
-    NamedChip {
-        jedec: [0xEF, 0x40, 0x17],
-        name: "Winbond W25Q64",
-    },
-    NamedChip {
-        jedec: [0xEF, 0x40, 0x16],
-        name: "Winbond W25Q32",
+        jedec: [0x1C, 0x70, 0x15],
+        name: "EON EN25QH16B",
     },
     NamedChip {
         jedec: [0x20, 0x20, 0x15],
         name: "Micron M25P16",
-    },
-    NamedChip {
-        jedec: [0x1C, 0x70, 0x15],
-        name: "EON EN25QH16B",
     },
     NamedChip {
         jedec: [0xC2, 0x20, 0x18],
@@ -54,13 +44,25 @@ pub static CHIP_NAMES: &[NamedChip] = &[
         jedec: [0xC8, 0x40, 0x15],
         name: "GigaDevice GD25Q16",
     },
-    // add more as you meet them…
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x16],
+        name: "Winbond W25Q32",
+    },
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x17],
+        name: "Winbond W25Q64",
+    },
+    NamedChip {
+        jedec: [0xEF, 0x40, 0x18],
+        name: "Winbond W25Q128JV",
+    },
+    // add more as you meet them (keep sorted by jedec)…
 ];
 
 /// Best-effort label: exact part if known, else "<Manufacturer> SPI NOR (id)", else raw id.
 pub fn describe(jedec: [u8; 3]) -> String {
-    if let Some(c) = CHIP_NAMES.iter().find(|c| c.jedec == jedec) {
-        return c.name.to_string();
+    if let Ok(i) = CHIP_NAMES.binary_search_by_key(&jedec, |c| c.jedec) {
+        return CHIP_NAMES[i].name.to_string();
     }
     match manufacturer(jedec[0]) {
         Some(m) => format!(
@@ -105,8 +107,9 @@ pub static FALLBACK_TABLE: &[KnownChip] = &[
 /// Build a `FlashProfile` for a chip in the fallback table, else `None`.
 pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
     FALLBACK_TABLE
-        .iter()
-        .find(|c| c.jedec == jedec)
+        .binary_search_by_key(&jedec, |c| c.jedec)
+        .ok()
+        .map(|i| &FALLBACK_TABLE[i])
         .map(|c| FlashProfile {
             page_size: c.page_size,
             address_width: if c.address_bytes == 4 {
@@ -126,6 +129,19 @@ pub fn lookup_fallback(jedec: [u8; 3]) -> Option<FlashProfile> {
 mod tests {
     use super::*;
     use crate::profile::{AddressWidth, EraseType, ProfileSource};
+
+    #[test]
+    fn tables_are_sorted_by_jedec_for_binary_search() {
+        // Strict `<` also rejects duplicate JEDEC ids. binary_search relies on this.
+        assert!(
+            CHIP_NAMES.windows(2).all(|w| w[0].jedec < w[1].jedec),
+            "CHIP_NAMES must be sorted ascending by JEDEC id"
+        );
+        assert!(
+            FALLBACK_TABLE.windows(2).all(|w| w[0].jedec < w[1].jedec),
+            "FALLBACK_TABLE must be sorted ascending by JEDEC id"
+        );
+    }
 
     #[test]
     fn m25p16_is_in_the_fallback_table() {
