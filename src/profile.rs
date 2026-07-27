@@ -93,13 +93,46 @@ impl FlashProfile {
     }
 }
 
+/// One planned erase: which granularity to apply at which address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EraseOp {
+    pub addr: usize,
+    pub ty: EraseType,
+}
+
+/// A resolved erase plan: the ordered ops covering a region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErasePlan {
+    ops: Vec<EraseOp>,
+}
+
+impl ErasePlan {
+    #[allow(dead_code)] // skip-erase guard for the progress UI; not yet read by the binary
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+    /// Number of erase operations — the progress-bar length.
+    #[allow(dead_code)] // progress-bar length; not yet read by the binary
+    pub fn blocks(&self) -> usize {
+        self.ops.len()
+    }
+    /// Total bytes the plan erases.
+    #[allow(dead_code)] // total erase size for the progress UI; not yet read by the binary
+    pub fn bytes(&self) -> usize {
+        self.ops.iter().map(|o| o.ty.size).sum()
+    }
+    pub fn ops(&self) -> &[EraseOp] {
+        &self.ops
+    }
+}
+
 /// Plan a minimal-ish erase covering `[offset, offset+len)`. Greedily takes the
 /// largest address-aligned erase type that does not overshoot past the region
 /// (rounded up to the smallest granularity), else the smallest. `(addr, opcode)`.
-pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usize, u8)> {
-    let mut plan = Vec::new();
+pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> ErasePlan {
+    let mut ops = Vec::new();
     if len == 0 {
-        return plan;
+        return ErasePlan { ops };
     }
     let min = profile.min_erase();
     let smallest = profile.erase.smallest();
@@ -108,15 +141,15 @@ pub fn plan_erase(profile: &FlashProfile, offset: usize, len: usize) -> Vec<(usi
     let end_aligned = end.div_ceil(min) * min;
     let mut a = offset - offset % min;
     while a < end {
-        let choice = profile
+        let ty = profile
             .erase
             .iter()
             .find(|e| a.is_multiple_of(e.size) && a + e.size <= end_aligned)
             .unwrap_or(smallest);
-        plan.push((a, choice.opcode));
-        a += choice.size;
+        ops.push(EraseOp { addr: a, ty });
+        a += ty.size;
     }
-    plan
+    ErasePlan { ops }
 }
 
 #[cfg(test)]
@@ -141,6 +174,10 @@ mod tests {
             source: ProfileSource::Sfdp,
             sfdp_revision: None,
         }
+    }
+
+    fn plan_addrs(p: &ErasePlan) -> Vec<(usize, u8)> {
+        p.ops().iter().map(|o| (o.addr, o.ty.opcode)).collect()
     }
 
     #[test]
@@ -183,7 +220,7 @@ mod tests {
     fn single_granularity_plan_is_64k_blocks() {
         let p = profile_with(&[(64 * 1024, 0xD8)]);
         assert_eq!(
-            plan_erase(&p, 0, 135_100),
+            plan_addrs(&plan_erase(&p, 0, 135_100)),
             vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0xD8)]
         );
     }
@@ -192,7 +229,7 @@ mod tests {
     fn mixed_granularity_uses_small_sector_at_tail() {
         let p = profile_with(&[(4 * 1024, 0x20), (32 * 1024, 0x52), (64 * 1024, 0xD8)]);
         assert_eq!(
-            plan_erase(&p, 0, 131_072 + 100),
+            plan_addrs(&plan_erase(&p, 0, 131_072 + 100)),
             vec![(0, 0xD8), (65_536, 0xD8), (131_072, 0x20)]
         );
     }

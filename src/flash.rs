@@ -5,7 +5,7 @@ use embedded_hal_async::spi::{Operation, SpiDevice};
 use std::time::Duration;
 
 use crate::catalog::lookup_fallback;
-use crate::profile::{AddressWidth, EraseMenu, FlashProfile, ProfileSource, plan_erase};
+use crate::profile::{AddressWidth, EraseMenu, ErasePlan, FlashProfile, ProfileSource, plan_erase};
 use crate::sfdp::{Bfpt, ParamHeader, SfdpHeader};
 
 // Universal SPI-NOR opcodes (M25P16 / EN25QH16B / W25Q16).
@@ -404,18 +404,36 @@ where
             .map_err(Self::spi_err)
     }
 
-    /// Erase every block overlapping `[offset, offset+len)`, choosing erase
-    /// granularities from the detected profile (`profile::plan_erase`).
+    /// Compute the erase plan covering `[offset, offset+len)` from the detected profile.
+    pub fn erase_plan(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> Result<ErasePlan, FlashError<SPI::Error, RST::Error>> {
+        Ok(plan_erase(self.require_profile()?, offset, len))
+    }
+
+    /// Execute a precomputed plan, calling `progress(blocks_done)` after each op.
+    pub async fn run_erase(
+        &mut self,
+        plan: &ErasePlan,
+        mut progress: impl FnMut(usize),
+    ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
+        for (i, op) in plan.ops().iter().enumerate() {
+            self.erase_op(op.addr as u32, op.ty.opcode).await?;
+            progress(i + 1);
+        }
+        Ok(())
+    }
+
+    /// Erase every block overlapping `[offset, offset+len)` (plan then execute).
     pub async fn erase_range(
         &mut self,
         offset: usize,
         len: usize,
     ) -> Result<(), FlashError<SPI::Error, RST::Error>> {
-        let plan = plan_erase(self.require_profile()?, offset, len);
-        for (addr, opcode) in plan {
-            self.erase_op(addr as u32, opcode).await?;
-        }
-        Ok(())
+        let plan = self.erase_plan(offset, len)?;
+        self.run_erase(&plan, |_| {}).await
     }
 
     async fn page_program(
