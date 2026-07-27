@@ -25,7 +25,12 @@ impl<S: fmt::Debug, R: fmt::Debug> From<FlashError<S, R>> for NorbertError {
             FlashError::VerifyMismatch { addr, .. } => NorbertError::VerifyMismatch { addr },
             FlashError::Timeout => NorbertError::Timeout,
             FlashError::NotDetected => NorbertError::NotDetected,
-            other => NorbertError::Other(anyhow::anyhow!("{other}")),
+            // Transport faults keep their fact via FlashError's Display. Matched
+            // explicitly (not a catch-all) so a future FlashError variant is a
+            // compile error here, not a silent mis-map.
+            e @ (FlashError::Spi(_) | FlashError::Bus(_)) => {
+                NorbertError::Other(anyhow::anyhow!("{e}"))
+            }
         }
     }
 }
