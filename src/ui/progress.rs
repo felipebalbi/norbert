@@ -1,7 +1,6 @@
 //! Restrained multi-phase progress: aligned Unicode bars for erase/program/verify.
 //! Inert in Machine mode. Draws to stderr (indicatif's default), leaving stdout
 //! (voice) clean.
-#![allow(dead_code)] // wired by the write handlers in Phase 5
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 

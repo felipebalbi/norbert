@@ -1,6 +1,5 @@
 //! The single application-level error. `flash::FlashError` stays generic in the
 //! core; this non-generic type is what handlers return and `ui` renders.
-#![allow(dead_code)] // wired up in Phase 5; the lint is added there too
 
 use crate::flash::FlashError;
 use core::fmt;

@@ -1,7 +1,6 @@
 //! Norbert's presentation layer: the only module that writes to the terminal.
 //! Handlers gather data and sequence these methods; personality text comes from
 //! `voice`; this module owns layout and the Human/Machine decision.
-#![allow(dead_code)] // fully wired in Phase 5, where the print lint is also added
 
 pub mod progress;
 

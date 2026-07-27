@@ -8,7 +8,6 @@
 //! must remain the TOP-LEVEL canceller — never compose these helpers under an
 //! outer `select!`/`timeout` that could drop their future mid-op and skip the
 //! release line.
-#![allow(dead_code)] // handlers/helpers wired live in Task 5.6
 
 // Submodules are declared by their creating tasks (5.3 inspect, 5.4 write,
 // 5.5 maintain + diagnose). The module-level allow above cascades to them.
@@ -82,5 +81,93 @@ where
     match outcome {
         Some(r) => r,
         None => Err(NorbertError::Cancelled),
+    }
+}
+
+use crate::cli::Cmd;
+use crate::ui::Ui;
+
+/// Route a parsed command to its handler.
+pub async fn dispatch(cli: &Cli, ui: &mut Ui) -> Result<(), NorbertError> {
+    let Some(cmd) = &cli.cmd else {
+        return Ok(());
+    };
+    match cmd {
+        Cmd::Jedec => {
+            let mut f = build_flasher(cli)?;
+            inspect::jedec(&mut f, ui).await
+        }
+        Cmd::Info => {
+            let mut f = build_flasher(cli)?;
+            inspect::info(&mut f, ui).await
+        }
+        Cmd::Detect => {
+            let mut f = build_flasher(cli)?;
+            inspect::detect(&mut f, ui).await
+        }
+        Cmd::Sfdp => {
+            let mut f = build_flasher(cli)?;
+            inspect::sfdp(&mut f, ui).await
+        }
+        Cmd::List => {
+            inspect::list(ui);
+            Ok(())
+        }
+        Cmd::Program {
+            bitstream,
+            offset,
+            no_verify,
+            chip_erase,
+            unprotect,
+        } => {
+            let mut f = build_flasher(cli)?;
+            write::program(
+                &mut f,
+                ui,
+                bitstream,
+                *offset,
+                *no_verify,
+                *chip_erase,
+                *unprotect,
+            )
+            .await
+        }
+        Cmd::Erase {
+            offset,
+            length,
+            chip,
+        } => {
+            let mut f = build_flasher(cli)?;
+            write::erase(&mut f, ui, *offset, *length, *chip).await
+        }
+        Cmd::Read {
+            out,
+            length,
+            offset,
+        } => {
+            let mut f = build_flasher(cli)?;
+            write::read(&mut f, ui, out, *length, *offset).await
+        }
+        Cmd::Verify { bitstream, offset } => {
+            let mut f = build_flasher(cli)?;
+            write::verify(&mut f, ui, bitstream, *offset).await
+        }
+        Cmd::Protect => {
+            let mut f = build_flasher(cli)?;
+            maintain::protect(&mut f, ui).await
+        }
+        Cmd::Unprotect => {
+            let mut f = build_flasher(cli)?;
+            maintain::unprotect(&mut f, ui).await
+        }
+        Cmd::Reset => {
+            let mut f = build_flasher(cli)?;
+            maintain::reset(&mut f, ui).await
+        }
+        Cmd::Doctor => diagnose::doctor(cli, ui).await,
+        Cmd::Test { sector } => {
+            let mut f = build_flasher(cli)?;
+            diagnose::test(&mut f, ui, *sector).await
+        }
     }
 }
