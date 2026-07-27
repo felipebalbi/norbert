@@ -50,12 +50,15 @@ where
         if f.is_protected().await? && !unprotect {
             return Err(NorbertError::Protected);
         }
+        // Oversize guard. `checked_add` so a pathological --offset can't overflow
+        // and silently slip past the capacity check.
+        let need = offset.checked_add(image.len());
         if let Some(cap) = f.profile().and_then(|p| p.capacity)
-            && offset + image.len() > cap
+            && need.is_none_or(|need| need > cap)
         {
             return Err(anyhow::anyhow!(
                 "image needs {} bytes but flash is {cap} bytes",
-                offset + image.len()
+                need.unwrap_or(usize::MAX)
             )
             .into());
         }
@@ -238,12 +241,15 @@ mod tests {
         let (mut ui, out, _e) = Ui::captured(Mode::Machine);
 
         // verify ON (no_verify = false); a mismatch would surface as Err here.
-        program(&mut f, &mut ui, &path, 0, false, false, false)
-            .await
-            .unwrap();
+        let r = program(&mut f, &mut ui, &path, 0, false, false, false).await;
         std::fs::remove_file(&path).ok();
+        r.unwrap();
 
         assert_eq!(&probe.mem()[..600], &image[..]);
+        assert!(
+            probe.mem()[600..].iter().all(|&b| b == 0xFF),
+            "wrote past the image"
+        );
         assert_eq!(out.contents(), "OK\n"); // machine token; voice/progress suppressed
     }
 }
