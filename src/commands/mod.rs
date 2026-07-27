@@ -12,6 +12,7 @@
 
 // Submodules are declared by their creating tasks (5.3 inspect, 5.4 write,
 // 5.5 maintain + diagnose). The module-level allow above cascades to them.
+pub mod inspect;
 
 use std::time::Duration;
 
