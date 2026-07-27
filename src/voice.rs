@@ -3,6 +3,7 @@
 //! Rules (see the plan's "Norbert's voice"): no exclamation points; dry,
 //! understated, mildly paternal; every failure carries the technical fact.
 //! Pure string builders — no I/O, no logic, and absolutely no jokes elsewhere.
+#![allow(dead_code)] // new builders are wired up in Phase 5
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -66,6 +67,46 @@ pub fn doctor_unstable() -> &'static str {
 pub fn version() -> String {
     format!("Norbert {VERSION}\nReliable since Tuesday.")
 }
+pub fn info_opener() -> &'static str {
+    "Let me see what this one says about itself."
+}
+pub fn info_sfdp_note(present: bool) -> &'static str {
+    if present {
+        "It told me all that itself. I appreciate a chip that keeps notes."
+    } else {
+        "It stayed quiet on the details, so I filled in from memory."
+    }
+}
+pub fn sfdp_opener() -> &'static str {
+    "Here's what the chip told me, byte for byte."
+}
+pub fn no_sfdp() -> &'static str {
+    "This one has no SFDP to show.\n\nI'll rely on what I already know."
+}
+pub fn list_opener() -> &'static str {
+    "The parts I keep notes on, in case they don't speak SFDP:"
+}
+pub fn list_note() -> &'static str {
+    "Anything with valid SFDP, I can work out on my own."
+}
+pub fn read_done(bytes: usize, path: &std::path::Path) -> String {
+    format!("Done. {bytes} bytes, saved to {}.", path.display())
+}
+pub fn programming_intro(name: &str, size: &str, offset: usize) -> String {
+    format!("Programming {name} — {size} at 0x{offset:06X}.")
+}
+pub fn program_summary(blocks: usize, size: &str, secs: f64) -> String {
+    format!("Done. Have a nice boot.  (erased {blocks} blocks, wrote {size} in {secs:.1}s)")
+}
+pub fn doctor_intro() -> &'static str {
+    "Let's have a look. I'll take my time."
+}
+pub fn timeout() -> &'static str {
+    "The chip stopped answering.\n\nI waited as long as I reasonably could."
+}
+pub fn not_detected() -> &'static str {
+    "I haven't identified this chip yet.\n\nRun detect first."
+}
 
 #[cfg(test)]
 mod tests {
@@ -92,6 +133,19 @@ mod tests {
             doctor_unstable().to_string(),
             nothing_unusual().to_string(),
             version(),
+            info_opener().to_string(),
+            info_sfdp_note(true).to_string(),
+            info_sfdp_note(false).to_string(),
+            sfdp_opener().to_string(),
+            no_sfdp().to_string(),
+            list_opener().to_string(),
+            list_note().to_string(),
+            read_done(4096, std::path::Path::new("dump.bin")),
+            programming_intro("Winbond W25Q128JV", "512 KiB", 0),
+            program_summary(3, "512 KiB", 4.2),
+            doctor_intro().to_string(),
+            timeout().to_string(),
+            not_detected().to_string(),
         ];
         for line in lines {
             assert!(
