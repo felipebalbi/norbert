@@ -1,5 +1,13 @@
 # Hardware bring-up — debug notes (for the deep-dive session)
 
+> **⚠ Historical log — the CLI has since changed.** The `--cs`, `--hold-gpio`,
+> `--hold-active`, and `--hold-release` flags used throughout this file were
+> **removed** in favour of a fixed pinout (CS→GPIO0/pin 11, /WP→GPIO1/pin 12,
+> /HOLD→GPIO2/pin 13, CRESET→GPIO3/pin 14) plus a single `--reset` flag — see
+> **README → Wiring**. The GPIO / RP2350 / header-pin facts below remain
+> accurate, but the `norbert …` invocations are historical and will now error;
+> don't copy them verbatim.
+
 Status: **software plan complete (Tasks 1–25).** On-hardware bring-up (plan Tasks 12 & 17)
 is blocked on a USB/HAL-level error, captured here so we can resume cold.
 
