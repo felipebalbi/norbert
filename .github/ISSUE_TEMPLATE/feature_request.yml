@@ -1,0 +1,87 @@
+name: ✨ Feature request
+description: Suggest a new command, flag, chip-handling improvement, or other enhancement.
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Norbert prefers simple, predictable tools — the more
+        concrete the proposal, the better.
+
+        Before filing, skim the [README](https://github.com/felipebalbi/norbert#readme)
+        and [HARDWARE-DEBUG.md](https://github.com/felipebalbi/norbert/blob/main/HARDWARE-DEBUG.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I confirmed this isn't already supported.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area(s)
+      description: Select all that apply.
+      multiple: true
+      options:
+        - detect / SFDP parsing
+        - catalog (names / manufacturers / fallback table)
+        - erase
+        - program
+        - verify
+        - read
+        - protect / reset
+        - doctor / test
+        - CLI (flags, output)
+        - transport (Pico de Gallo bridge)
+        - documentation
+        - CI / tooling
+        - other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: A concrete scenario. "I'm trying to … and Norbert …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Sketch the command line, flag, or output you'd like to see.
+      placeholder: "e.g. `norbert dump --range 0x0000..0x1000` prints a hex view without writing a file."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, and any workaround you use today.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Datasheets, links to similar tools (flashrom, Bus Pirate), captures.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Are you willing to contribute?
+      options:
+        - label: I'd like to implement this and open a PR.
+        - label: I can help test on hardware once someone implements it.
