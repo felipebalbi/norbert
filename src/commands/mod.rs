@@ -20,10 +20,11 @@ use std::time::Duration;
 
 use embedded_hal_async::spi::SpiDevice;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Cmd};
 use crate::device::{self, HostBus};
 use crate::error::NorbertError;
 use crate::flash::{self, BusAccess, Flasher};
+use crate::ui::Ui;
 
 /// The concrete flasher the CLI drives.
 pub type HostFlasher = Flasher<pico_de_gallo_hal::SpiDev, HostBus>;
@@ -83,9 +84,6 @@ where
         None => Err(NorbertError::Cancelled),
     }
 }
-
-use crate::cli::Cmd;
-use crate::ui::Ui;
 
 /// Route a parsed command to its handler.
 pub async fn dispatch(cli: &Cli, ui: &mut Ui) -> Result<(), NorbertError> {

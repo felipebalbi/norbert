@@ -107,19 +107,13 @@ pub struct ErasePlan {
 }
 
 impl ErasePlan {
-    #[allow(dead_code)] // skip-erase guard for the progress UI; not yet read by the binary
+    #[allow(dead_code)] // exercised by the planner tests
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
     /// Number of erase operations — the progress-bar length.
-    #[allow(dead_code)] // progress-bar length; not yet read by the binary
     pub fn blocks(&self) -> usize {
         self.ops.len()
-    }
-    /// Total bytes the plan erases.
-    #[allow(dead_code)] // total erase size for the progress UI; not yet read by the binary
-    pub fn bytes(&self) -> usize {
-        self.ops.iter().map(|o| o.ty.size).sum()
     }
     pub fn ops(&self) -> &[EraseOp] {
         &self.ops
