@@ -36,8 +36,7 @@ pub fn build_flasher(cli: &Cli) -> anyhow::Result<HostFlasher> {
 
 /// Build a flasher at a caller-chosen SPI frequency (doctor steps the clock).
 pub fn build_flasher_at(cli: &Cli, freq: u32) -> anyhow::Result<HostFlasher> {
-    let device::Connected { spi, bus } =
-        device::connect(cli.serial.as_deref(), freq, cli.cs, cli.hold())?;
+    let device::Connected { spi, bus } = device::connect(cli.serial.as_deref(), freq, cli.reset)?;
     let max_chunk = pico_de_gallo_lib::MAX_TRANSFER_SIZE.min(flash::PAGE_SIZE);
     Ok(Flasher::with_config(
         spi,

@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::device::{HoldConfig, Level, Release};
-
 #[derive(Parser)]
 #[command(
     name = "norbert",
@@ -20,20 +18,11 @@ pub struct Cli {
     /// SPI clock in Hz (USB-FS bound; 10 MHz is plenty).
     #[arg(long, global = true, default_value_t = 10_000_000)]
     pub freq: u32,
-    /// User GPIO (0-3) wired to the flash CS (SS_B). Default: User GPIO 0 (header pin 11).
-    #[arg(long, global = true, default_value_t = 0)]
-    pub cs: u8,
-    /// User GPIO (0-3) that holds another bus master (e.g. an FPGA's CRESET) off the
-    /// shared SPI while we work. Default: User GPIO 1 (header pin 12).
-    /// iCE40 example: `--hold-gpio 1 --hold-active low --hold-release hi-z`.
-    #[arg(long, global = true, default_value_t = 1)]
-    pub hold_gpio: u8,
-    /// Level to hold the bus GPIO at.
-    #[arg(long, global = true, value_enum, default_value_t = Level::Low)]
-    pub hold_active: Level,
-    /// What to do with the bus GPIO on release.
-    #[arg(long, global = true, value_enum, default_value_t = Release::HiZ)]
-    pub hold_release: Release,
+    /// Hold a shared bus master off the SPI while programming, then release it so it
+    /// boots. Wire the target's CRESET to User GPIO 3 (header pin 14). Omit for a
+    /// bare chip or any flash with no other bus master on the SPI.
+    #[arg(long, global = true)]
+    pub reset: bool,
     /// Machine-friendly output: drop the commentary, print IDs/addresses/OK/FAIL only.
     #[arg(long, global = true)]
     pub quiet: bool,
@@ -42,17 +31,6 @@ pub struct Cli {
     pub version: bool,
     #[command(subcommand)]
     pub cmd: Option<Cmd>,
-}
-
-impl Cli {
-    /// Build the bus-hold config from the flags (hold GPIO defaults to User GPIO 1).
-    pub fn hold(&self) -> HoldConfig {
-        HoldConfig {
-            pin: self.hold_gpio,
-            active: self.hold_active,
-            release: self.hold_release,
-        }
-    }
 }
 
 #[derive(Subcommand)]

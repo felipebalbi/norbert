@@ -59,7 +59,7 @@ pub fn doctor_unstable() -> &'static str {
 }
 /// doctor: what to check when no chip answers.
 pub fn doctor_no_chip_hint() -> &'static str {
-    "  Check CS (--cs), MISO, GND, power, and that any other bus master is held off (--hold-gpio)."
+    "  Check CS, MISO, GND, and power — and if another bus master shares the SPI, add --reset."
 }
 pub fn version() -> String {
     format!("Norbert {VERSION}\nReliable since Tuesday.")
