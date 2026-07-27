@@ -115,9 +115,16 @@ mod tests {
 
     #[test]
     fn removed_gpio_flags_are_rejected() {
+        use clap::error::ErrorKind;
         for bad in ["--cs", "--hold-gpio", "--hold-active", "--hold-release"] {
-            let r = Cli::try_parse_from(["norbert", bad, "0", "jedec"]);
-            assert!(r.is_err(), "{bad} should no longer be a valid flag");
+            let err = Cli::try_parse_from(["norbert", bad, "jedec"])
+                .err()
+                .unwrap_or_else(|| panic!("{bad} should no longer be a valid flag"));
+            assert_eq!(
+                err.kind(),
+                ErrorKind::UnknownArgument,
+                "{bad} should be rejected as an unknown argument"
+            );
         }
     }
 }
