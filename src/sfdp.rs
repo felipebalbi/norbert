@@ -113,7 +113,6 @@ impl Bfpt {
 
         let page_size = dword(b, 11)
             .map(|d11| 1usize << ((d11 >> 4) & 0xF))
-            .filter(|&p| p >= 1)
             .unwrap_or(256);
 
         Bfpt {

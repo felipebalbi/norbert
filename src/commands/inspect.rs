@@ -113,13 +113,13 @@ where
         if let Some((maj, min)) = p.sfdp_revision {
             rows.push(Row::new("sfdp_rev", "SFDP rev", format!("{maj}.{min}")));
         }
-        let menu = p
+        let menu: Vec<String> = p
             .erase
             .iter()
             .map(|e| format!("{}:{:02X}", e.size, e.opcode))
-            .collect::<Vec<_>>()
-            .join(" ");
-        rows.push(Row::new("erase", "erase", menu));
+            .collect();
+        // Human reads space-separated; machine is comma-separated (no spaces in a key=value).
+        rows.push(Row::split("erase", "erase", menu.join(" "), menu.join(",")));
     }
     ui.rows(&rows);
     match &profile {

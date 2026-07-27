@@ -50,17 +50,17 @@ where
         if f.is_protected().await? && !unprotect {
             return Err(NorbertError::Protected);
         }
-        // Oversize guard. `checked_add` so a pathological --offset can't overflow
-        // and silently slip past the capacity check.
-        let need = offset.checked_add(image.len());
+        // Oversize guard. `checked_add` rejects a pathological --offset up front,
+        // even on an unknown-capacity chip (before it could overflow plan_erase).
+        let need = offset
+            .checked_add(image.len())
+            .ok_or_else(|| anyhow::anyhow!("offset + image length overflows the address space"))?;
         if let Some(cap) = f.profile().and_then(|p| p.capacity)
-            && need.is_none_or(|need| need > cap)
+            && need > cap
         {
-            return Err(anyhow::anyhow!(
-                "image needs {} bytes but flash is {cap} bytes",
-                need.unwrap_or(usize::MAX)
-            )
-            .into());
+            return Err(
+                anyhow::anyhow!("image needs {need} bytes but flash is {cap} bytes").into(),
+            );
         }
         if unprotect {
             f.unprotect().await?;

@@ -82,7 +82,11 @@ pub fn connect(
     cs_pin: u8,
     hold: HoldConfig,
 ) -> Result<Connected> {
-    assert_ne!(cs_pin, hold.pin, "CS and hold GPIO must differ");
+    if cs_pin == hold.pin {
+        return Err(anyhow!(
+            "CS and hold GPIO must differ (both are User GPIO {cs_pin}); pick a different --cs or --hold-gpio"
+        ));
+    }
     let mut hal = match serial {
         Some(sn) => Hal::new_validated_with_serial_number(sn),
         None => Hal::new_validated(),
