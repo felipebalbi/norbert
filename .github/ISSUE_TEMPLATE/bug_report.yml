@@ -1,0 +1,137 @@
+name: 🐞 Bug report
+description: Report something Norbert does that it shouldn't.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Norbert would rather know.
+
+        **Please don't report security vulnerabilities here.** Use a private
+        [security advisory](https://github.com/felipebalbi/norbert/security/advisories/new) instead.
+
+        The more detail about your chip, your Pico de Gallo, and the exact
+        command you ran, the faster this gets fixed.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I am on the latest released Norbert and Pico de Gallo firmware, or I explain below why not.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area(s)
+      description: Select all that apply.
+      multiple: true
+      options:
+        - detect / SFDP parsing
+        - catalog (names / manufacturers / fallback table)
+        - erase
+        - program
+        - verify
+        - read
+        - protect / reset
+        - doctor / test
+        - CLI (flags, output)
+        - transport (Pico de Gallo bridge)
+        - documentation
+        - CI / tooling
+        - other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: chip
+    attributes:
+      label: Chip under test
+      description: JEDEC id and part, if known. `norbert info` prints the id.
+      placeholder: "EF 40 18 — Winbond W25Q128JV"
+    validations:
+      required: true
+
+  - type: input
+    id: bridge
+    attributes:
+      label: Pico de Gallo firmware version + hardware revision
+      placeholder: "e.g. firmware-v0.6.0 (hw-rev1)"
+    validations:
+      required: true
+
+  - type: input
+    id: norbert-version
+    attributes:
+      label: Norbert version
+      description: Output of `norbert --version`.
+      placeholder: "norbert 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Host operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: wiring
+    attributes:
+      label: Wiring / setup
+      description: Bare chip on a clip vs. breakout/in-circuit; --reset, --freq, shared bus master.
+      placeholder: "bare W25Q128 on a SOIC-8 clip, default 10 MHz, no --reset"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The exact `norbert` command(s) that trigger it.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output / error
+      description: Paste the full output. `--quiet` output or a backtrace helps.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, captures, evidence
+      description: Logic-analyzer captures, photos of the wiring, RUST_LOG output — anything.
+    validations:
+      required: false
+
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression info
+      description: Did this used to work? Last known-good version? `git bisect` results are gold.
+    validations:
+      required: false
