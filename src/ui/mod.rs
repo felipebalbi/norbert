@@ -3,6 +3,8 @@
 //! `voice`; this module owns layout and the Human/Machine decision.
 #![allow(dead_code)] // fully wired in Phase 5, where the print lint is also added
 
+pub mod progress;
+
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -75,6 +77,11 @@ impl Ui {
     #[cfg(test)]
     pub fn from_parts(mode: Mode, out: Box<dyn Write>, err: Box<dyn Write>) -> Ui {
         Ui { mode, out, err }
+    }
+
+    /// Build a progress view for this run (inert in Machine mode).
+    pub fn progress(&self, plan: progress::ProgressPlan) -> progress::Progress {
+        progress::Progress::new(self.mode, plan)
     }
 
     /// A voice aside (opener/closer/note). Human only.
