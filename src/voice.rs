@@ -102,7 +102,7 @@ pub fn doctor_intro() -> &'static str {
     "Let's have a look. I'll take my time."
 }
 pub fn timeout() -> &'static str {
-    "The chip stopped answering.\n\nI waited as long as I reasonably could."
+    "The chip stopped answering.\n\nI gave it plenty of time. Check power and wiring, then try a lower --freq."
 }
 pub fn not_detected() -> &'static str {
     "I haven't identified this chip yet.\n\nRun detect first."
