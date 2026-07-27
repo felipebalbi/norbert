@@ -4,6 +4,9 @@ mod error;
 mod flash;
 mod profile;
 mod sfdp;
+#[cfg(test)]
+mod testsupport;
+mod ui;
 mod voice;
 
 use anyhow::{Context, Result};
