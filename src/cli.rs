@@ -99,3 +99,25 @@ pub enum Cmd {
         sector: Option<usize>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_defaults_off_and_parses_when_set() {
+        let cli = Cli::try_parse_from(["norbert", "jedec"]).expect("bare subcommand parses");
+        assert!(!cli.reset, "--reset must default to false");
+
+        let cli = Cli::try_parse_from(["norbert", "--reset", "jedec"]).expect("--reset parses");
+        assert!(cli.reset, "--reset must set the flag");
+    }
+
+    #[test]
+    fn removed_gpio_flags_are_rejected() {
+        for bad in ["--cs", "--hold-gpio", "--hold-active", "--hold-release"] {
+            let r = Cli::try_parse_from(["norbert", bad, "0", "jedec"]);
+            assert!(r.is_err(), "{bad} should no longer be a valid flag");
+        }
+    }
+}
