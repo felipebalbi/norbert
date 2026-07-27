@@ -85,7 +85,7 @@ impl fmt::Display for FlashId {
 /// `acquire` must make the flash's SPI bus exclusively ours; `release` returns
 /// control. For a bare chip / clip this is a no-op. For a shared bus
 /// it is a GPIO held at a level (the device layer's `HostBus`) — e.g. the iCE40 CRESET driven low
-/// to tri-state the FPGA's SPI pins, then released Hi-Z so it reconfigures.
+/// to tri-state the FPGA's SPI pins, then driven high on release so it reconfigures.
 pub trait BusAccess {
     type Error: fmt::Debug;
     fn acquire(&mut self) -> Result<(), Self::Error>;
@@ -557,7 +557,7 @@ where
         Ok(())
     }
 
-    /// Release CRESET (Hi-Z) so the FPGA reconfigures from flash.
+    /// Release CRESET (driven high) so the FPGA reconfigures from flash.
     pub fn release_bus(&mut self) -> Result<(), FlashError<SPI::Error, RST::Error>> {
         self.reset.release().map_err(Self::bus_err)
     }

@@ -82,21 +82,85 @@ For scripts, `--quiet` drops the commentary and prints machine-friendly
 lines instead (IDs, addresses, `OK`/`FAIL`). Norbert also goes quiet
 automatically when output is not a terminal.
 
+## Wiring
+
+Norbert talks to a raw SPI-NOR flash over a **Pico de Gallo v1.1** USB bridge.
+The wiring is fixed — connect the flash to these header pins and every command
+just works:
+
+| Flash pin        | Wire to (Pico de Gallo) | Header pin | Notes                          |
+|------------------|-------------------------|------------|--------------------------------|
+| CS / SS_B        | GPIO0                   | 11         | chip-select, software-driven   |
+| SI / DI / IO0    | SPI_MOSI                | 6          | data **into** the flash        |
+| SO / DO / IO1    | SPI_MISO                | 5          | data **out of** the flash      |
+| SCK              | SPI_SCK                 | 7          | serial clock                   |
+| /WP / IO2        | GPIO1                   | 12         | held high for you              |
+| /HOLD / IO3      | GPIO2                   | 13         | held high for you              |
+| GND              | GND                     | 2 (or 24)  | common ground (required)       |
+| VCC              | +3V3 / VREF             | 23 (or 1)  | only if the Pico powers it     |
+| CRESET           | GPIO3                   | 14         | optional — see "Connecting"    |
+
+Norbert drives the flash's `/WP` (write-protect) and `/HOLD` lines **high** for
+you, so a bare chip on a clip works without external pull-ups. If your board
+already pulls them up, just leave GPIO1 and GPIO2 unconnected.
+
+Two things worth knowing:
+
+- **Chip-select is on GPIO0 (pin 11), not the header's `SPI_CS` (pin 8).**
+  Norbert software-drives CS across each transaction; the hardware `SPI_CS` pad
+  is not used.
+- **Mind the data direction:** the flash's input (IO0/SI) goes to **MOSI
+  (pin 6)** and its output (IO1/SO) goes to **MISO (pin 5)**. Reversing them
+  reads all `0x00`/`0xFF`.
+
+### Header pins Norbert uses
+
+The v1.1 connector is a keyed **2×12 (24-pin)** box header. Viewed from above
+with the USB pointing up, pin 1 is top-right:
+
+```
+        ┌──────── USB ────────┐
+ pin  2 │ GND *        VREF     │ pin  1
+ pin  4 │ I2C_SCL      I2C_SDA  │ pin  3
+ pin  6 │ SPI_MOSI *   SPI_MISO*│ pin  5
+ pin  8 │ SPI_CS       SPI_SCK *│ pin  7
+ pin 10 │ UART_RX      UART_TX  │ pin  9
+ pin 12 │ GPIO1 *      GPIO0   *│ pin 11
+ pin 14 │ GPIO3 *      GPIO2   *│ pin 13
+ pin 16 │ PWM1         PWM0     │ pin 15
+ pin 18 │ PWM3         PWM2     │ pin 17
+ pin 20 │ ADC0         ONEWIRE  │ pin 19
+ pin 22 │ ADC2         ADC1     │ pin 21
+ pin 24 │ GND          +3V3     │ pin 23
+        └─────────────────────┘
+
+ * used by Norbert:
+   pin  6  SPI_MOSI → flash IO0 / SI  (data in)
+   pin  5  SPI_MISO → flash IO1 / SO  (data out)
+   pin  7  SPI_SCK  → flash SCK
+   pin 11  GPIO0    → flash CS
+   pin 12  GPIO1    → flash /WP   (driven high)
+   pin 13  GPIO2    → flash /HOLD  (driven high)
+   pin 14  GPIO3    → target CRESET (only with --reset)
+   pin  2  GND      → common ground (pin 24 is also GND)
+   pin  1 / 23      → +3V3, optional flash power
+```
+
 ## Connecting
 
-Norbert talks to a raw SPI-NOR flash over a Pico de Gallo USB bridge.
-Global flags select the device and the wiring:
+A few global flags tune the session:
 
-- `--serial <SN>` — pick a specific Pico de Gallo
+- `--serial <SN>` — pick a specific Pico de Gallo by USB serial number
 - `--freq <HZ>` — SPI clock (default 10 MHz)
-- `--cs <GPIO>` — the user GPIO wired to the flash chip-select
-- `--hold-gpio <GPIO> --hold-active <low|high> --hold-release <drive-high|drive-low|hi-z>` —
-  hold another bus master (for example an FPGA's reset) off the shared SPI
-  while programming, then release it
+- `--reset` — hold another bus master off the shared SPI while programming, then
+  release it so it boots
+- `--quiet` — machine-friendly output (IDs / addresses / `OK` / `FAIL` only)
 
-If another master shares the bus, hold it off first. On an iCE40, that means
-driving CRESET low while programming and releasing it (Hi-Z) afterwards so the
-FPGA reconfigures from the freshly written flash.
+If another master shares the bus, wire its reset to **CRESET (GPIO3, header
+pin 14)** and pass `--reset`. Norbert drives CRESET low while programming and
+high on release, so the master (for example an iCE40) is held off the SPI during
+the write and reconfigures from the freshly written flash afterwards — whether or
+not the board has a CRESET pull-up.
 
 ## Design principles
 
