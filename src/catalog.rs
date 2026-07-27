@@ -59,7 +59,7 @@ pub static CHIP_NAMES: &[NamedChip] = &[
     // add more as you meet them (keep sorted by jedec)…
 ];
 
-/// Best-effort label: exact part if known, else "<Manufacturer> SPI NOR (id)", else raw id.
+/// Best-effort label: exact part if known, else `"<Manufacturer> SPI NOR (id)"`, else raw id.
 pub fn describe(jedec: [u8; 3]) -> String {
     if let Ok(i) = CHIP_NAMES.binary_search_by_key(&jedec, |c| c.jedec) {
         return CHIP_NAMES[i].name.to_string();
