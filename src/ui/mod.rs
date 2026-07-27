@@ -203,4 +203,27 @@ mod tests {
         let _ = ui.fail(&NorbertError::Protected);
         assert_eq!(err.contents(), format!("{}\n", voice::protected()));
     }
+
+    #[test]
+    fn fail_cancelled_yields_exit_130() {
+        // The Ctrl-C exit code is a script-facing contract; pin it.
+        let (mut ui, _o, _e) = Ui::captured(Mode::Machine);
+        assert_eq!(ui.fail(&NorbertError::Cancelled), ExitCode::from(130));
+        let (mut ui, _o, _e) = Ui::captured(Mode::Machine);
+        assert_eq!(ui.fail(&NorbertError::Protected), ExitCode::from(1));
+    }
+
+    #[test]
+    fn hexdump_wraps_at_16_and_addresses_from_base() {
+        // hexdump's base != 0 path is unreachable from production (sfdp calls
+        // hexdump(0, ..)), so this unit test is the only guard on its arithmetic.
+        let (mut ui, out, _e) = Ui::captured(Mode::Human);
+        let bytes: Vec<u8> = (0..20).collect(); // 16 + 4 → two rows
+        ui.hexdump(0x100, &bytes);
+        assert_eq!(
+            out.contents(),
+            "  0100: 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\
+             \x20 0110: 10 11 12 13\n",
+        );
+    }
 }
