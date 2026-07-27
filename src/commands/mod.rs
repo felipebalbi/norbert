@@ -1,4 +1,13 @@
 //! Command handlers + the bus-session helpers that guarantee bus release.
+//!
+//! Release is done by an explicit `release_bus()` after the op completes or is
+//! cancelled — deliberately NOT via an RAII `Drop` guard. `release_bus()` drives
+//! a blocking-GPIO write through the HAL's `block_in_place` bridge, and running
+//! that during an async task-drop (unwind/cancellation) is unsafe (see the
+//! async-conversion design). The invariant that keeps this sound: `with_cancel`
+//! must remain the TOP-LEVEL canceller — never compose these helpers under an
+//! outer `select!`/`timeout` that could drop their future mid-op and skip the
+//! release line.
 #![allow(dead_code)] // handlers/helpers wired live in Task 5.6
 
 // Submodules are declared by their creating tasks (5.3 inspect, 5.4 write,
