@@ -931,9 +931,10 @@ pub(crate) mod testfakes {
         wel: bool,
         busy_reads: u32, // # of RDSR calls that report WIP=1 before clearing
         sfdp: Vec<u8>,
-        mode4b: bool,       // true once EN4B (0xB7) seen → 32-bit addresses
-        protected: bool,    // true once BP bits set → PAGE PROGRAM silently no-ops
-        powered_down: bool, // true once 0xB9 seen → ignores all but 0xAB (models the iCE40)
+        mode4b: bool,               // true once EN4B (0xB7) seen → 32-bit addresses
+        protected: bool,            // true once BP bits set → PAGE PROGRAM silently no-ops
+        powered_down: bool,         // true once 0xB9 seen → ignores all but 0xAB (models the iCE40)
+        corrupt_next_program: bool, // one-shot: next PAGE PROGRAM silently fails (fault injection)
     }
 
     /// Shareable behavioral SPI-NOR. Clone to inspect memory after moving one
@@ -952,6 +953,7 @@ pub(crate) mod testfakes {
                 mode4b: false,
                 protected: false,
                 powered_down: false,
+                corrupt_next_program: false,
             })))
         }
         pub(crate) fn set_busy_reads(&self, n: u32) {
@@ -965,6 +967,11 @@ pub(crate) mod testfakes {
         }
         pub(crate) fn set_powered_down(&self, p: bool) {
             self.0.borrow_mut().powered_down = p;
+        }
+        /// One-shot fault injection: the next PAGE PROGRAM silently writes nothing,
+        /// so a following verify mismatches (models a failed program).
+        pub(crate) fn set_corrupt_next_program(&self) {
+            self.0.borrow_mut().corrupt_next_program = true;
         }
         pub(crate) fn mem(&self) -> Vec<u8> {
             self.0.borrow().mem.clone()
@@ -1055,10 +1062,14 @@ pub(crate) mod testfakes {
                 CMD_PP => {
                     let a = addr_at(&mosi);
                     if st.wel && !st.protected {
-                        for (i, b) in mosi[1 + ab..].iter().enumerate() {
-                            let page = a & !(PAGE_SIZE - 1);
-                            let off = (a + i - page) % PAGE_SIZE; // wraps within page
-                            st.mem[page + off] &= *b; // NOR: program clears bits
+                        if st.corrupt_next_program {
+                            st.corrupt_next_program = false; // one-shot: this PP silently fails
+                        } else {
+                            for (i, b) in mosi[1 + ab..].iter().enumerate() {
+                                let page = a & !(PAGE_SIZE - 1);
+                                let off = (a + i - page) % PAGE_SIZE; // wraps within page
+                                st.mem[page + off] &= *b; // NOR: program clears bits
+                            }
                         }
                     }
                     st.wel = false;

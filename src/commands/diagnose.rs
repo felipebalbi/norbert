@@ -205,3 +205,82 @@ where
     ui.line(voice::nothing_unusual(), "OK");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flash::testfakes::{FakeBus, FakeFlash, flasher};
+    use crate::ui::{Mode, Ui};
+
+    // M25P16 (fallback): 64 KiB sectors, so sector 0 is [0, 65536).
+    const SEC: usize = 64 * 1024;
+    fn recognizable() -> Vec<u8> {
+        (0..SEC).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn test_sector_round_trip_restores_original() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        let original = recognizable();
+        flash.preset(0, &original);
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, out, _e) = Ui::captured(Mode::Machine);
+
+        test(&mut f, &mut ui, Some(0)).await.unwrap();
+
+        assert_eq!(probe.mem()[..SEC], original[..], "sector not restored");
+        assert_eq!(out.contents(), "OK\n");
+    }
+
+    #[tokio::test]
+    async fn test_sector_refuses_protected_and_writes_nothing() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        flash.set_protected(true);
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, _o, _e) = Ui::captured(Mode::Machine);
+
+        let r = test(&mut f, &mut ui, Some(0)).await;
+
+        assert!(matches!(r, Err(NorbertError::Protected)));
+        assert!(
+            probe.mem().iter().all(|&b| b == 0xFF),
+            "a protected chip was modified"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sector_restores_even_when_the_pattern_test_fails() {
+        // The safety crown-jewel: a failed pattern test must NOT leave the sector
+        // destroyed — the original is always restored.
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        let original = recognizable();
+        flash.preset(0, &original);
+        flash.set_corrupt_next_program(); // the pattern PROGRAM silently fails
+        let probe = flash.clone();
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, _o, _e) = Ui::captured(Mode::Machine);
+
+        let r = test(&mut f, &mut ui, Some(0)).await;
+
+        assert!(matches!(r, Err(NorbertError::VerifyMismatch { .. })));
+        assert_eq!(
+            probe.mem()[..SEC],
+            original[..],
+            "sector not restored after a failed test"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_none_passes_on_consistent_reads() {
+        let flash = FakeFlash::new(2 * 1024 * 1024, [0x20, 0x20, 0x15]);
+        flash.preset(0, &[0x12u8; 4096]);
+        let mut f = flasher(flash, FakeBus::new(), 256);
+        let (mut ui, out, _e) = Ui::captured(Mode::Machine);
+
+        test(&mut f, &mut ui, None).await.unwrap();
+
+        assert_eq!(out.contents(), "OK\n");
+    }
+}
