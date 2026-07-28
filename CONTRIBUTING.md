@@ -71,4 +71,28 @@ someone can confirm it on silicon.
   above).
 - Bugs and feature ideas have issue forms — pick one when you open an issue.
 
+## Releasing
+
+Releases are automated by [release-plz](https://release-plz.dev). You don't cut
+releases by hand.
+
+**How it works**
+
+1. Merges to `main` update an open **Release PR** that bumps `Cargo.toml`,
+   `Cargo.lock`, and `CHANGELOG.md`. Norbert is pre-1.0, so breaking changes bump
+   the **minor** version and fixes bump the **patch** version.
+2. Merging the Release PR tags `vX.Y.Z`, creates a GitHub Release, and publishes
+   to crates.io.
+3. The tag triggers `release-binaries.yml`, which attaches `norbert` binaries for
+   Linux (x86_64, aarch64), Windows (x86_64, aarch64), and macOS (Apple Silicon).
+
+**One-time setup (maintainers)**
+
+- **crates.io Trusted Publishing:** on crates.io → norbert → Settings → Trusted
+  Publishing, add a GitHub Actions publisher for `felipebalbi/norbert` with
+  workflow `release-plz.yml`. This lets CI publish without a stored token.
+- **Allow Actions to create PRs:** repo Settings → Actions → General → Workflow
+  permissions → enable "Allow GitHub Actions to create and approve pull
+  requests".
+
 Thanks for helping Norbert keep good notes.
