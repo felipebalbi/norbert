@@ -1,5 +1,11 @@
 # Hello.
 
+[![CI](https://github.com/felipebalbi/norbert/actions/workflows/ci.yml/badge.svg)](https://github.com/felipebalbi/norbert/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/norbert.svg)](https://crates.io/crates/norbert)
+[![docs.rs](https://docs.rs/norbert/badge.svg)](https://docs.rs/norbert)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.90-orange.svg)](https://www.rust-lang.org)
+
 I'm **Norbert**.
 
 I program SPI NOR flash chips.
