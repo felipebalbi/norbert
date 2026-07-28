@@ -5,14 +5,30 @@ use crate::flash::FlashError;
 use core::fmt;
 
 #[derive(Debug)]
+/// The single application-level error handlers return and [`crate::ui`] renders.
+///
+/// The generic [`FlashError`] from the core is collapsed into these non-generic
+/// variants via [`From`], so the rest of the application never carries the SPI
+/// or bus-access error type parameters.
 pub enum NorbertError {
+    /// No SPI-NOR flash responded to RDID (an idle/floating bus reads all
+    /// `0x00`/`0xFF`).
     NoFlash,
+    /// A chip responded but has neither SFDP nor a fallback-table entry; carries
+    /// its raw 3-byte JEDEC ID.
     Unsupported([u8; 3]),
+    /// Read-back did not match the expected image at byte `addr`.
     VerifyMismatch { addr: usize },
+    /// A write was refused because status-register block-protection is enabled.
     Protected,
+    /// The flash stopped answering within the poll timeout.
     Timeout,
+    /// A geometry operation was attempted before `detect` established a profile.
     NotDetected,
+    /// The operation was interrupted (Ctrl-C); maps to exit code 130.
     Cancelled,
+    /// Any other error (transport faults, I/O, argument validation), preserved
+    /// via [`anyhow`].
     Other(anyhow::Error),
 }
 

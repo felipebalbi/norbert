@@ -11,6 +11,8 @@ use clap::{Parser, Subcommand};
     disable_version_flag = true,
     arg_required_else_help = true
 )]
+/// Parsed command line: global flags shared by every subcommand, plus the
+/// selected [`Cmd`]. Built by [`clap`] from the process arguments.
 pub struct Cli {
     /// Pick a specific Pico de Gallo by USB serial number.
     #[arg(long, global = true)]
@@ -34,12 +36,16 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+/// The subcommand to run. Each variant maps to one handler in
+/// [`crate::commands`].
 pub enum Cmd {
     /// Read the raw 3-byte JEDEC ID.
     Jedec,
     /// Erase + program + verify a bitstream at an offset, then boot it.
     Program {
+        /// Path to the bitstream/image file to write.
         bitstream: PathBuf,
+        /// Byte offset in flash to program at (default 0).
         #[arg(long, default_value_t = 0)]
         offset: usize,
         /// Skip read-back verification.
@@ -54,24 +60,32 @@ pub enum Cmd {
     },
     /// Dump `length` bytes from `offset` to a file.
     Read {
+        /// Destination file for the dumped bytes.
         out: PathBuf,
+        /// Number of bytes to read.
         #[arg(long)]
         length: usize,
+        /// Byte offset in flash to start reading from (default 0).
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
     /// Compare flash contents against a file.
     Verify {
+        /// Path to the file to compare flash contents against.
         bitstream: PathBuf,
+        /// Byte offset in flash where the comparison starts (default 0).
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
     /// Erase (covered blocks for a size, or the whole chip).
     Erase {
+        /// Byte offset in flash where the erase region starts (default 0).
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Region length in bytes; erases every block overlapping it.
         #[arg(long)]
         length: Option<usize>,
+        /// Erase the entire chip instead of a region.
         #[arg(long)]
         chip: bool,
     },
