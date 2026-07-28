@@ -13,6 +13,13 @@ documentation = "https://docs.rs/norbert"
 keywords = ["spi-nor", "flash", "jedec", "sfdp", "programmer"]
 categories = ["command-line-utilities", "embedded", "hardware-support"]
 
+# docs.rs builds on Linux with network access blocked. Our `nusb` dependency
+# (via pico-de-gallo-*) needs libudev there, which fails in that sandbox. Build
+# the docs for Windows instead, where nusb uses WinUSB and needs no system libs.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-gnu"
+targets = []
+
 [dependencies]
 pico-de-gallo-hal = "0.6"
 pico-de-gallo-lib = "0.6"          # MAX_TRANSFER_SIZE, list_devices
