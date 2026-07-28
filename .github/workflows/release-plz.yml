@@ -1,0 +1,70 @@
+# Release manager for Norbert.
+#
+# On every push to main:
+#   release-plz-release — if a Release PR was just merged, tag vX.Y.Z, create the
+#                         GitHub Release, and publish to crates.io (OIDC token).
+#   release-plz-pr      — open or update the "Release PR" that bumps Cargo.toml,
+#                         Cargo.lock, and CHANGELOG.md based on Conventional Commits.
+#
+# Pre-1.0 semver is release-plz's default for 0.x crates: breaking -> minor,
+# everything else -> patch.
+#
+# crates.io auth uses OIDC Trusted Publishing — no long-lived token in secrets.
+# One-time setup: enable Trusted Publishing for felipebalbi/norbert on crates.io,
+# and allow GitHub Actions to create PRs (Settings -> Actions -> General).
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-plz-release:
+    name: release-plz / release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'felipebalbi/norbert' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Run release-plz release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  release-plz-pr:
+    name: release-plz / pr
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'felipebalbi/norbert' }}
+    concurrency:
+      group: release-plz-pr-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz release-pr
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
