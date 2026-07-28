@@ -5,6 +5,13 @@ edition = "2024"
 rust-version = "1.90"
 license = "MIT"
 authors = ["Felipe Balbi <felipe@balbi.sh>"]
+description = "A patient SPI-NOR flasher for the Pico de Gallo: read JEDEC/SFDP, erase, program, verify, and boot bitstreams."
+readme = "README.md"
+repository = "https://github.com/felipebalbi/norbert"
+homepage = "https://github.com/felipebalbi/norbert"
+documentation = "https://docs.rs/norbert"
+keywords = ["spi-nor", "flash", "jedec", "sfdp", "programmer"]
+categories = ["command-line-utilities", "embedded", "hardware-support"]
 
 [dependencies]
 pico-de-gallo-hal = "0.6"
