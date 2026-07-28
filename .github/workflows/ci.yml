@@ -76,14 +76,14 @@ jobs:
       - run: cargo test --locked
 
   msrv:
-    name: ubuntu / 1.97 / check
+    name: ubuntu / 1.90 / check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install 1.97
+      - name: Install 1.90
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97"
+          toolchain: "1.90"
       - run: cargo check --locked
 
   lockfile:
