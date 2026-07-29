@@ -13,12 +13,12 @@ documentation = "https://docs.rs/norbert"
 keywords = ["spi-nor", "flash", "jedec", "sfdp", "programmer"]
 categories = ["command-line-utilities", "embedded", "hardware-support"]
 
-# docs.rs builds on Linux with network access blocked. Our `nusb` dependency
-# (via pico-de-gallo-*) needs libudev there, which fails in that sandbox. Build
-# the docs for Windows instead, where nusb uses WinUSB and needs no system libs.
+# Norbert is a thin binary over its library; document the internal modules so
+# the crate root isn't empty. The docs are target-independent, so build only the
+# default (Linux) target.
 [package.metadata.docs.rs]
-default-target = "x86_64-pc-windows-gnu"
 targets = []
+rustdoc-args = ["--document-private-items"]
 
 [dependencies]
 pico-de-gallo-hal = "0.6"
