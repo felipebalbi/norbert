@@ -7,3 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Norbert is pre-1.0: breaking changes bump the minor version, fixes bump the patch.
 
 ## [Unreleased]
+
+## [0.1.1](https://github.com/felipebalbi/norbert/compare/v0.1.0...v0.1.1) - 2026-07-29
+
+### Other
+
+- *(cargo)* render internal module docs on docs.rs
+- extract library crate for docs.rs
+- *(bump)* update pico-de-gallo-lib
+- *(contributing)* document the automated release process
+- add cross-OS binary release workflow
+- add release-plz workflow
+- add release-plz configuration
+- *(changelog)* seed CHANGELOG for release-plz
+- *(plan)* add release manager implementation plan
+- *(spec)* add release manager design
+- *(cargo)* change default docs build to windows
+- *(readme)* add badges
