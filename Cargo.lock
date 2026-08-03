@@ -530,7 +530,7 @@ dependencies = [
  "embedded-hal-async",
  "indicatif",
  "pico-de-gallo-hal",
- "pico-de-gallo-lib 0.7.0",
+ "pico-de-gallo-lib 0.7.1",
  "tokio",
 ]
 
@@ -615,9 +615,9 @@ dependencies = [
 
 [[package]]
 name = "pico-de-gallo-lib"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa6d379532d8a572052ee887f31ab2d1a06ca4bfda0fc47d521f400a107b219b"
+checksum = "6997b08df9312f5d9d18707c9f0c31bba4afa5652bb17a4d647b957e056985c1"
 dependencies = [
  "embedded-hal",
  "nusb",
