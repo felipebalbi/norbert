@@ -22,7 +22,7 @@ rustdoc-args = ["--document-private-items"]
 
 [dependencies]
 pico-de-gallo-hal = "0.6"
-pico-de-gallo-lib = "0.7"          # MAX_TRANSFER_SIZE, list_devices
+pico-de-gallo-lib = "0.8"          # MAX_TRANSFER_SIZE, list_devices
 embedded-hal = "1.0"               # blocking OutputPin for the bus-hold GPIO
 embedded-hal-async = "1.0"         # async SpiDevice for the flash core
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
