@@ -8,6 +8,14 @@ Norbert is pre-1.0: breaking changes bump the minor version, fixes bump the patc
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/felipebalbi/norbert/compare/v0.1.1...v0.1.2) - 2026-09-02
+
+### Other
+
+- chore(deps)(deps): bump pico-de-gallo-hal from 0.6.1 to 0.7.0
+- chore(deps)(deps): bump pico-de-gallo-lib from 0.7.0 to 0.8.0 ([#7](https://github.com/felipebalbi/norbert/pull/7))
+- chore(deps)(deps): bump pico-de-gallo-lib from 0.7.0 to 0.8.0
+
 ## [0.1.1](https://github.com/felipebalbi/norbert/compare/v0.1.0...v0.1.1) - 2026-07-29
 
 ### Other
