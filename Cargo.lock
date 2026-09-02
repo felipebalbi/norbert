@@ -530,7 +530,7 @@ dependencies = [
  "embedded-hal-async",
  "indicatif",
  "pico-de-gallo-hal",
- "pico-de-gallo-lib 0.8.0",
+ "pico-de-gallo-lib",
  "tokio",
 ]
 
@@ -576,28 +576,16 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "pico-de-gallo-hal"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b1c0aa6f04e15ce26bd35129fd7f79e11b71cdf4d60d809d895c552a059c785"
+checksum = "2a5fccb5566578ce4edcfbdb33306a0038daae56501792e1affa65725af201e8"
 dependencies = [
  "embedded-hal",
  "embedded-hal-async",
  "embedded-io 0.6.1",
  "embedded-io-async",
- "pico-de-gallo-lib 0.6.0",
+ "pico-de-gallo-lib",
  "tokio",
-]
-
-[[package]]
-name = "pico-de-gallo-internal"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4182bfb43393c1417841aa5e0ac6c589c5b6a5538b4944466a51e61eb5a1d4cb"
-dependencies = [
- "postcard",
- "postcard-rpc",
- "postcard-schema",
- "serde",
 ]
 
 [[package]]
@@ -614,26 +602,13 @@ dependencies = [
 
 [[package]]
 name = "pico-de-gallo-lib"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4914d602770de9212a5f288f780ea46b37c71d1601848485fd662571f377ed0e"
-dependencies = [
- "embedded-hal",
- "nusb",
- "pico-de-gallo-internal 0.6.1",
- "postcard-rpc",
- "tokio",
-]
-
-[[package]]
-name = "pico-de-gallo-lib"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f87a39f1b7fa81a949b08bf27a986296c1e3e7617e3b30f39a72e7ba9ef9b3b3"
 dependencies = [
  "embedded-hal",
  "nusb",
- "pico-de-gallo-internal 0.7.0",
+ "pico-de-gallo-internal",
  "postcard-rpc",
  "tokio",
 ]
